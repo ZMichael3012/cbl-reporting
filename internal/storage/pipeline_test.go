@@ -158,6 +158,11 @@ func TestBuildViewDDL(t *testing.T) {
 		"transaction_id != ''",
 		"tupleElement(entry.3, 3) <= 18",
 		"CAST(if(entry.2 = 1, 'debit', 'credit') AS Enum8('debit' = 1, 'credit' = 2))",
+		// Словарь обогащает новые строки на входе; FINAL исключает размножение
+		// строк на несхлопнутых дублях словаря (CBL-11.3).
+		"LEFT JOIN (SELECT account_id, account_type, merchant_id FROM reporting.dim_accounts FINAL) AS dim",
+		"dim.account_type AS account_type, dim.merchant_id AS merchant_id",
+		"ON flat.account_id = dim.account_id",
 	} {
 		assert.Contains(t, ledgerView, fragment)
 	}

@@ -217,9 +217,18 @@ AND tupleElement(amount_tuple, 3) <= 18`,
 entries Array(Tuple(account_id String, direction Int32,
 amount Tuple(minor_units Int64, asset String, decimals UInt32))),
 occurred_at Tuple(seconds Int64, nanos Int32)`,
-			Select: `SELECT arrayFirst(x -> x.1 = 'event_id', _headers).2 AS event_id, transaction_id,
+			// Подзапрос переименовывает кортежи (алиас гасит одноименную
+			// колонку, проверено на 24.8) и выносит ARRAY JOIN; словарь
+			// dim_accounts обогащает новые строки на входе (CBL-11.3, FR-3):
+			// FINAL в правой части не дает несхлопнутым дублям размножать
+			// строки; отсутствующий счет дает пустые значения (backfill догонит).
+			Select: `SELECT flat.event_id, flat.transaction_id, flat.entry_index, flat.account_id,
+dim.account_type AS account_type, dim.merchant_id AS merchant_id,
+flat.asset, flat.decimals, flat.direction, flat.amount, flat.ref_type, flat.ref_id,
+flat.event_type, flat.occurred_at
+FROM (
+SELECT arrayFirst(x -> x.1 = 'event_id', _headers).2 AS event_id, transaction_id,
 toUInt8(ordinality - 1) AS entry_index, entry.1 AS account_id,
-'' AS account_type, '' AS merchant_id,
 tupleElement(entry.3, 2) AS asset, toUInt8(tupleElement(entry.3, 3)) AS decimals,
 CAST(if(entry.2 = 1, 'debit', 'credit') AS Enum8('debit' = 1, 'credit' = 2)) AS direction,
 tupleElement(entry.3, 1) AS amount, ref_type, ref_id,
@@ -230,7 +239,10 @@ FROM reporting.kafka_ledger_events
 ARRAY JOIN entries AS entry, arrayEnumerate(entries) AS ordinality
 WHERE arrayFirst(x -> x.1 = 'event_id', _headers).2 != '' AND transaction_id != ''
 AND entry.2 IN (1, 2) AND length(entries) <= 255
-AND tupleElement(entry.3, 3) <= 18`,
+AND tupleElement(entry.3, 3) <= 18
+) AS flat
+LEFT JOIN (SELECT account_id, account_type, merchant_id FROM reporting.dim_accounts FINAL) AS dim
+ON flat.account_id = dim.account_id`,
 		},
 		{
 			FactTable:  "fact_payouts",

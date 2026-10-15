@@ -380,3 +380,62 @@ AND position(create_table_query, '''`+internalBrokers[0]+`''') > 0`), "исхо�
 	waitForCount(t, db, fmt.Sprintf(
 		"SELECT count() FROM reporting.fact_payment_events FINAL WHERE payment_id = '%s'", afterRestoreID), 1)
 }
+
+// TestLedgerEnrichmentIntegration проверяет обогащение строк леджера словарем
+// dim_accounts на входе (JOIN MV): счет словаря получает account_type и
+// merchant_id, счет вне словаря остается пустым до backfill (CBL-11.3, FR-3).
+func TestLedgerEnrichmentIntegration(t *testing.T) {
+	ctx := context.Background()
+	network := startNetwork(t)
+	internalBrokers, externalBrokers := startKafka(t, network)
+	db := startClickHouse(t, network)
+	require.NoError(t, storage.Migrate(ctx, db, filepath.Join("..", "..", "migrations")))
+
+	// Словарь наполнен до старта конвейера: строка для acc-merchant
+	// (acc-clearing в плане не зарегистрирован и останется без значений).
+	require.NoError(t, storage.InsertDimAccounts(ctx, db, []storage.DimAccount{{
+		AccountID: "acc-merchant", AccountType: "merchant", MerchantID: "m-1", Asset: "USDT", Decimals: 6,
+	}}))
+
+	pipeline, err := storage.NewPipeline(db, internalBrokers[0], "events.proto", nil)
+	require.NoError(t, err)
+	require.NoError(t, pipeline.Reconcile(ctx))
+
+	transactionID := "tx-" + uuid.NewString()
+	ledger, err := producer.LedgerPosted(uuid.NewString(), transactionID, "pay-"+uuid.NewString())
+	require.NoError(t, err)
+	require.NoError(t, producer.Publish(ctx, externalBrokers, []producer.Event{ledger}))
+	waitForCount(t, db, fmt.Sprintf(
+		"SELECT count() FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s'", transactionID), 2)
+
+	var accountType, merchantID string
+	require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(`SELECT account_type, merchant_id
+FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account_id = 'acc-merchant'`, transactionID)).
+		Scan(&accountType, &merchantID))
+	assert.Equal(t, "merchant", accountType, "счет словаря обогащает строку на входе")
+	assert.Equal(t, "m-1", merchantID)
+
+	require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(`SELECT account_type, merchant_id
+FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account_id = 'acc-clearing'`, transactionID)).
+		Scan(&accountType, &merchantID))
+	assert.Empty(t, accountType, "счет вне словаря остается пустым")
+	assert.Empty(t, merchantID)
+
+	// Появление словарной записи задним числом лечится backfill-мутацией
+	// (проверяется циклом словаря в integration-тестах vocabulary).
+	require.NoError(t, storage.BackfillAccount(ctx, db, storage.DimAccount{
+		AccountID: "acc-clearing", AccountType: "clearing", MerchantID: "", Asset: "USDT", Decimals: 6,
+	}))
+	enriched := 0
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(`SELECT count()
+FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account_id = 'acc-clearing' AND account_type = 'clearing'`, transactionID)).
+			Scan(&enriched))
+		if enriched == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	assert.Equal(t, 1, enriched, "мутация backfill обогатила историческую строку")
+}

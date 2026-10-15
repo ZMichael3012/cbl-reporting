@@ -2,7 +2,9 @@
 // Запуск из каталога сервиса: go run ./test/e2e/produce -scenario full
 // Сценарии: full - четыре события (payment/ledger/payout/recon), печатает
 // идентификаторы для проверок; duplicate - повтор события payment; broken -
-// битое сообщение, затем валидное (проверка устойчивости конвейера).
+// битое сообщение, затем валидное (проверка устойчивости конвейера); sentinel -
+// событие в партицию исходного. Флаг -live ставит occurred_at текущим временем
+// (сверка reporting с Ledger в e2e).
 package main
 
 import (
@@ -21,11 +23,19 @@ import (
 // main разбирает флаги и выполняет сценарий публикации.
 func main() {
 	brokerList := flag.String("brokers", "localhost:9092", "список брокеров через запятую")
-	scenario := flag.String("scenario", "full", "сценарий: full, duplicate, broken")
+	scenario := flag.String("scenario", "full", "сценарий: full, duplicate, broken, sentinel")
 	paymentID := flag.String("payment-id", "", "payment_id для duplicate/broken/sentinel")
 	eventID := flag.String("event-id", "", "event_id для duplicate")
 	key := flag.String("key", "", "ключ партиции для sentinel (payment_id исходного события)")
+	live := flag.Bool("live", false, "ставить occurred_at текущим временем (окно сверки e2e)")
 	flag.Parse()
+
+	// Окно сверки reporting отсчитывается от текущего времени: сценарии
+	// проверки сверки публикуются с occurred_at=now, остальные - с фиксированным
+	// временем для стабильных проверок значений.
+	if *live {
+		producer.OccurredAt = time.Now().UTC()
+	}
 
 	brokers := strings.Split(*brokerList, ",")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -48,8 +58,9 @@ func main() {
 		alert, err := producer.ReconAmountMismatch(alertEventID, payoutID, "m-1")
 		exitOnError(err)
 		events = []producer.Event{payment, ledger, payout, alert}
-		fmt.Printf("payment_id=%s\npayment_event_id=%s\ntransaction_id=%s\npayout_id=%s\nalert_id=%s\n",
-			currentPaymentID, paymentEventID, transactionID, payoutID, alertEventID)
+		fmt.Printf("payment_id=%s\npayment_event_id=%s\ntransaction_id=%s\npayout_id=%s\nalert_id=%s\noccurred_at=%s\n",
+			currentPaymentID, paymentEventID, transactionID, payoutID, alertEventID,
+			producer.OccurredAt.Format(time.RFC3339Nano))
 	case "duplicate":
 		if *paymentID == "" || *eventID == "" {
 			exitOnError(fmt.Errorf("duplicate требует -payment-id и -event-id"))

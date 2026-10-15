@@ -1,5 +1,6 @@
 // main запускает сервис reporting платформы CBL: миграции ClickHouse,
-// реконсиляция Kafka-конвейера и административные эндпоинты.
+// реконсиляция Kafka-конвейера, словарь dim_accounts, сверка с Ledger и
+// административные эндпоинты.
 package main
 
 import (
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,7 +23,12 @@ import (
 
 	"github.com/cbl/cbl-kit/ginmw"
 
+	"github.com/cbl/cbl-reporting/internal/config"
+	"github.com/cbl/cbl-reporting/internal/ledger"
+	"github.com/cbl/cbl-reporting/internal/ledgercheck"
+	"github.com/cbl/cbl-reporting/internal/metrics"
 	"github.com/cbl/cbl-reporting/internal/storage"
+	"github.com/cbl/cbl-reporting/internal/vocabulary"
 )
 
 // main запускает сервис и завершает процесс ненулевым кодом при ошибке.
@@ -32,7 +39,8 @@ func main() {
 	}
 }
 
-// run собирает зависимости конвейера и обслуживает запросы до сигнала остановки.
+// run собирает зависимости конвейера, словаря и сверки и обслуживает запросы
+// до сигнала остановки.
 func run() error {
 	log, err := zap.NewProduction()
 	if err != nil {
@@ -40,33 +48,24 @@ func run() error {
 	}
 	defer func() { _ = log.Sync() }()
 
-	dsn := os.Getenv("CLICKHOUSE_DSN")
-	if dsn == "" {
-		return errors.New("CLICKHOUSE_DSN is required")
+	cfg, err := config.Load(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
-	brokers := os.Getenv("KAFKA_BROKERS")
-	if brokers == "" {
-		return errors.New("KAFKA_BROKERS is required")
-	}
-	schemaPath := getenv("SCHEMA_PATH", "events.proto")
-	migrationsDir := getenv("MIGRATIONS_DIR", "./migrations")
-	httpAddr := getenv("HTTP_ADDR", ":8110")
-	grpcAddr := getenv("GRPC_ADDR", ":9110")
-	metricsAddr := getenv("METRICS_ADDR", ":9310")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := storage.Open(dsn)
+	db, err := storage.Open(cfg.ClickHouseDSN)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
 
-	if err := storage.Migrate(ctx, db, migrationsDir); err != nil {
+	if err := storage.Migrate(ctx, db, cfg.MigrationsDir); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
-	pipeline, err := storage.NewPipeline(db, brokers, schemaPath, log)
+	pipeline, err := storage.NewPipeline(db, cfg.KafkaBrokers, cfg.SchemaPath, log)
 	if err != nil {
 		return fmt.Errorf("pipeline configuration: %w", err)
 	}
@@ -74,8 +73,36 @@ func run() error {
 		return fmt.Errorf("reconcile pipeline: %w", err)
 	}
 	log.Info("ingestion pipeline reconciled",
-		zap.String("brokers", brokers),
-		zap.String("schema", schemaPath))
+		zap.String("brokers", cfg.KafkaBrokers),
+		zap.String("schema", cfg.SchemaPath))
+
+	ledgerClient, err := ledger.NewClient(cfg.LedgerGRPCAddr, cfg.LedgerTimeout)
+	if err != nil {
+		return fmt.Errorf("ledger client: %w", err)
+	}
+	defer func() { _ = ledgerClient.Close() }()
+
+	counters := &metrics.Counters{}
+	syncer, err := vocabulary.New(db, ledgerClient, cfg.DimRefreshInterval, cfg.BackfillLimit, cfg.DimMerchantsLimit, log, counters)
+	if err != nil {
+		return fmt.Errorf("vocabulary worker: %w", err)
+	}
+	checker, err := ledgercheck.New(db, ledgerClient, cfg.CheckInterval, cfg.CheckWindow,
+		cfg.CheckAccounts, cfg.CheckPageLimit, cfg.CheckMaxPages, log, counters)
+	if err != nil {
+		return fmt.Errorf("ledger check worker: %w", err)
+	}
+
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		syncer.Run(ctx)
+	}()
+	go func() {
+		defer workers.Done()
+		checker.Run(ctx)
+	}()
 
 	healthSrv := health.NewServer()
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
@@ -98,20 +125,20 @@ func run() error {
 	})
 
 	httpSrv := &http.Server{
-		Addr:              httpAddr,
+		Addr:              cfg.HTTPAddr,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	metricsSrv := &http.Server{Addr: metricsAddr, Handler: metricsHandler(), ReadHeaderTimeout: 5 * time.Second}
+	metricsSrv := &http.Server{Addr: cfg.MetricsAddr, Handler: counters.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	grpcSrv := grpc.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
 
 	serveErrors := make(chan error, 3)
 	go func() {
-		log.Info("http server started", zap.String("addr", httpAddr))
+		log.Info("http server started", zap.String("addr", cfg.HTTPAddr))
 		if serveErr := httpSrv.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Error("http server failed", zap.Error(serveErr))
 			serveErrors <- fmt.Errorf("http server: %w", serveErr)
@@ -119,7 +146,7 @@ func run() error {
 		}
 	}()
 	go func() {
-		log.Info("metrics server started", zap.String("addr", metricsAddr))
+		log.Info("metrics server started", zap.String("addr", cfg.MetricsAddr))
 		if serveErr := metricsSrv.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Error("metrics server failed", zap.Error(serveErr))
 			serveErrors <- fmt.Errorf("metrics server: %w", serveErr)
@@ -127,14 +154,14 @@ func run() error {
 		}
 	}()
 	go func() {
-		listener, listenErr := net.Listen("tcp", grpcAddr)
+		listener, listenErr := net.Listen("tcp", cfg.GRPCAddr)
 		if listenErr != nil {
 			log.Error("grpc listener failed", zap.Error(listenErr))
 			serveErrors <- fmt.Errorf("grpc listener: %w", listenErr)
 			stop()
 			return
 		}
-		log.Info("grpc server started", zap.String("addr", grpcAddr))
+		log.Info("grpc server started", zap.String("addr", cfg.GRPCAddr))
 		if serveErr := grpcSrv.Serve(listener); serveErr != nil {
 			log.Error("grpc server failed", zap.Error(serveErr))
 			serveErrors <- fmt.Errorf("grpc server: %w", serveErr)
@@ -154,6 +181,9 @@ func run() error {
 		}
 	}
 	log.Info("shutdown started")
+	// Остановка воркеров раньше серверов: циклы не начинают новую работу на
+	// закрывающемся соединении ClickHouse.
+	stop()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if shutdownErr := httpSrv.Shutdown(shutdownCtx); shutdownErr != nil {
@@ -163,24 +193,16 @@ func run() error {
 		log.Error("metrics shutdown failed", zap.Error(shutdownErr))
 	}
 	grpcSrv.GracefulStop()
+	workersDone := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(workersDone)
+	}()
+	select {
+	case <-workersDone:
+	case <-time.After(10 * time.Second):
+		log.Warn("workers did not finish in time")
+	}
 	log.Info("shutdown finished")
 	return serveFailure
-}
-
-// metricsHandler отдает заглушку метрик до задачи 0.7.
-func metricsHandler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = fmt.Fprintln(w, "# metrics endpoint placeholder (task 0.7)")
-	})
-	return mux
-}
-
-// getenv возвращает переменную окружения или значение по умолчанию.
-func getenv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

@@ -67,6 +67,22 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+  # ledger-stub - тестовый Ledger для словаря dim_accounts и сверки (e2e);
+  # в продуктовый контур не входит. Административный HTTP публикуется для
+  # сида проводок из e2e-скрипта, gRPC доступен только внутри сети.
+  ledger-stub:
+    build:
+      context: ../..
+      dockerfile: cbl-reporting/test/e2e/ledgerstub/Dockerfile
+    environment:
+      STUB_GRPC_ADDR: ":9040"
+      STUB_HTTP_ADDR: ":9041"
+      STUB_MERCHANT_REF: "m-1"
+    # gRPC стаба слушает loopback (локальный запуск бинарника сервиса),
+    # админ-сид - тоже loopback: в сеть стенда ничего не публикуется сверх
+    # внутренних адресов (тестовый контур, не продукт).
+    ports: ["127.0.0.1:9040:9040", "127.0.0.1:9041:9041"]
+    networks: [cbl-net]
   reporting:
     profiles: ["app"]
     build:
@@ -80,6 +96,12 @@ services:
       KAFKA_BROKERS: kafka:29092
       SCHEMA_PATH: events.proto
       MIGRATIONS_DIR: /app/migrations
+      # Словарь и сверка на стенде: ускоренные интервалы и короткое окно,
+      # чтобы e2e укладывался в минуты (в продукт не переносятся).
+      LEDGER_GRPC_ADDR: ledger-stub:9040
+      DIM_REFRESH_INTERVAL: 5s
+      LEDGER_CHECK_INTERVAL: 5s
+      LEDGER_CHECK_WINDOW: 15s
     ports:
       - "8110:8110"
       - "9110:9110"
@@ -87,6 +109,7 @@ services:
     depends_on:
       kafka: { condition: service_healthy }
       clickhouse: { condition: service_healthy }
+      ledger-stub: { condition: service_started }
     networks: [cbl-net]
 
 volumes:
