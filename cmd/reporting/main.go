@@ -1,4 +1,5 @@
-// main запускает HTTP- и gRPC-сервис reporting платформы CBL.
+// main запускает сервис reporting платформы CBL: миграции ClickHouse,
+// реконсиляция Kafka-конвейера и административные эндпоинты.
 package main
 
 import (
@@ -16,18 +17,39 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/reflection"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/cbl/cbl-kit/ginmw"
+
+	"github.com/cbl/cbl-reporting/internal/storage"
 )
 
-// main поднимает gRPC-сервер сервиса, административный HTTP-сервер и сервер метрик.
+// main запускает сервис и завершает процесс ненулевым кодом при ошибке.
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "fatal:", err)
+		os.Exit(1)
+	}
+}
+
+// run собирает зависимости конвейера и обслуживает запросы до сигнала остановки.
+func run() error {
 	log, err := zap.NewProduction()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("logger: %w", err)
 	}
 	defer func() { _ = log.Sync() }()
 
+	dsn := os.Getenv("CLICKHOUSE_DSN")
+	if dsn == "" {
+		return errors.New("CLICKHOUSE_DSN is required")
+	}
+	brokers := os.Getenv("KAFKA_BROKERS")
+	if brokers == "" {
+		return errors.New("KAFKA_BROKERS is required")
+	}
+	schemaPath := getenv("SCHEMA_PATH", "events.proto")
+	migrationsDir := getenv("MIGRATIONS_DIR", "./migrations")
 	httpAddr := getenv("HTTP_ADDR", ":8110")
 	grpcAddr := getenv("GRPC_ADDR", ":9110")
 	metricsAddr := getenv("METRICS_ADDR", ":9310")
@@ -35,34 +57,64 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	db, err := storage.Open(dsn)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := storage.Migrate(ctx, db, migrationsDir); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+	pipeline, err := storage.NewPipeline(db, brokers, schemaPath, log)
+	if err != nil {
+		return fmt.Errorf("pipeline configuration: %w", err)
+	}
+	if err := pipeline.Reconcile(ctx); err != nil {
+		return fmt.Errorf("reconcile pipeline: %w", err)
+	}
+	log.Info("ingestion pipeline reconciled",
+		zap.String("brokers", brokers),
+		zap.String("schema", schemaPath))
+
+	healthSrv := health.NewServer()
+	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+
 	router := gin.New()
-	router.Use(gin.Recovery())
+	router.Use(ginmw.RequestID(), ginmw.AccessLog(log), ginmw.Recovery(log))
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 	router.GET("/readyz", func(c *gin.Context) {
+		readyCtx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if readyErr := storage.Ready(readyCtx, db); readyErr != nil {
+			healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unavailable"})
+			return
+		}
+		healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	httpSrv := &http.Server{Addr: httpAddr, Handler: router, ReadHeaderTimeout: 5 * time.Second}
-	metricsSrv := &http.Server{Addr: metricsAddr, Handler: metricsHandler(), ReadHeaderTimeout: 5 * time.Second}
-
-	grpcSrv := grpc.NewServer()
-	healthSrv := health.NewServer()
-	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(grpcSrv, healthSrv)
-	reflection.Register(grpcSrv)
-
-	grpcListener, err := net.Listen("tcp", grpcAddr)
-	if err != nil {
-		log.Error("grpc listen failed", zap.String("addr", grpcAddr), zap.Error(err))
-		return
+	httpSrv := &http.Server{
+		Addr:              httpAddr,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
+	metricsSrv := &http.Server{Addr: metricsAddr, Handler: metricsHandler(), ReadHeaderTimeout: 5 * time.Second}
+	grpcSrv := grpc.NewServer()
+	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
 
+	serveErrors := make(chan error, 3)
 	go func() {
 		log.Info("http server started", zap.String("addr", httpAddr))
 		if serveErr := httpSrv.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Error("http server failed", zap.Error(serveErr))
+			serveErrors <- fmt.Errorf("http server: %w", serveErr)
 			stop()
 		}
 	}()
@@ -70,18 +122,37 @@ func main() {
 		log.Info("metrics server started", zap.String("addr", metricsAddr))
 		if serveErr := metricsSrv.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Error("metrics server failed", zap.Error(serveErr))
+			serveErrors <- fmt.Errorf("metrics server: %w", serveErr)
 			stop()
 		}
 	}()
 	go func() {
+		listener, listenErr := net.Listen("tcp", grpcAddr)
+		if listenErr != nil {
+			log.Error("grpc listener failed", zap.Error(listenErr))
+			serveErrors <- fmt.Errorf("grpc listener: %w", listenErr)
+			stop()
+			return
+		}
 		log.Info("grpc server started", zap.String("addr", grpcAddr))
-		if serveErr := grpcSrv.Serve(grpcListener); serveErr != nil {
+		if serveErr := grpcSrv.Serve(listener); serveErr != nil {
 			log.Error("grpc server failed", zap.Error(serveErr))
+			serveErrors <- fmt.Errorf("grpc server: %w", serveErr)
 			stop()
 		}
 	}()
 
-	<-ctx.Done()
+	var serveFailure error
+	select {
+	case <-ctx.Done():
+	case serveFailure = <-serveErrors:
+	}
+	if serveFailure == nil {
+		select {
+		case serveFailure = <-serveErrors:
+		default:
+		}
+	}
 	log.Info("shutdown started")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -93,6 +164,7 @@ func main() {
 	}
 	grpcSrv.GracefulStop()
 	log.Info("shutdown finished")
+	return serveFailure
 }
 
 // metricsHandler отдает заглушку метрик до задачи 0.7.
@@ -105,7 +177,7 @@ func metricsHandler() http.Handler {
 	return mux
 }
 
-// getenv возвращает значение переменной окружения или значение по умолчанию.
+// getenv возвращает переменную окружения или значение по умолчанию.
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!-- Каталог wire-схем конвейера (Kafka engine запрещает абсолютный путь в
+format_schema: путь резолвится относительно format_schema_path). Каталог
+/schemas монтируется read-only из deploy/format_schemas сервиса. -->
+<clickhouse>
+    <format_schema_path>/schemas</format_schema_path>
+</clickhouse>

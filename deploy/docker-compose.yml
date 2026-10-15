@@ -51,8 +51,15 @@ services:
       CLICKHOUSE_PASSWORD: cbl
       CLICKHOUSE_DB: reporting
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      # Каталог форматов монтируется read-only; entrypoint пропускает chown
+      # (volume остается записываемым для серверного процесса).
+      CLICKHOUSE_DO_NOT_CHOWN: "1"
     volumes:
       - ch-data:/var/lib/clickhouse
+      # Wire-схема конвейера читается сервером ClickHouse из format_schema_path
+      # (Kafka engine запрещает абсолютный путь в format_schema).
+      - ./format_schemas:/schemas:ro
+      - ./clickhouse-config/10-format-schema-path.xml:/etc/clickhouse-server/config.d/10-format-schema-path.xml:ro
     ports: ["8123:8123", "9000:9000"]
     networks: [cbl-net]
     healthcheck:
@@ -63,13 +70,16 @@ services:
   reporting:
     profiles: ["app"]
     build:
-      context: ..
+      context: ../..
+      dockerfile: cbl-reporting/Dockerfile
     environment:
       HTTP_ADDR: ":8110"
       GRPC_ADDR: ":9110"
       METRICS_ADDR: ":9310"
-      KAFKA_BROKERS: kafka:29092
       CLICKHOUSE_DSN: clickhouse://cbl:cbl@clickhouse:9000/reporting
+      KAFKA_BROKERS: kafka:29092
+      SCHEMA_PATH: events.proto
+      MIGRATIONS_DIR: /app/migrations
     ports:
       - "8110:8110"
       - "9110:9110"

@@ -1,0 +1,78 @@
+// Wire-схема декодирования событий CBL для ClickHouse Kafka engine (CBL-11.2).
+// Схема - wire-совместимое уплощение контрактов billing/events/v1 и
+// billing/common/v1 из cbl-protos@cf-3.4: имена и пакеты для wire-формата не
+// важны, номера и типы полей сохранены; неиспользуемые поля опущены (декодер
+// пропускает неизвестные wire-поля, номера по правилам buf не переиспользуются).
+// Импорты не используются: ClickHouse не резолвит импорты между файлами схем, а
+// google.protobuf.Timestamp не мапится на DateTime64, поэтому Timestamp
+// декодируется как Tuple(seconds, nanos) и конвертируется в materialized view.
+// Файл монтируется в format_schema_path ClickHouse (compose сервиса и
+// testcontainers); SCHEMA_PATH задает путь относительно format_schema_path
+// (абсолютный путь Kafka engine запрещает).
+syntax = "proto3";
+
+package cbl.reporting.schemas;
+
+message Timestamp {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+
+message Money {
+  int64 minor_units = 1;
+  string asset = 2;
+  uint32 decimals = 3;
+}
+
+message PaymentRow {
+  string payment_id = 1;
+  string merchant_id = 2;
+  Money expected_amount = 4;
+  Money received_amount = 5;
+  Money fee = 6;
+  string quote_id = 7;
+  string rate = 8;
+  string txid = 9;
+  uint64 state_version = 10;
+  Timestamp occurred_at = 11;
+}
+
+message LedgerEntryRow {
+  string account_id = 1;
+  int32 direction = 2;
+  Money amount = 3;
+}
+
+message LedgerRow {
+  string transaction_id = 1;
+  int32 type = 2;
+  string ref_type = 3;
+  string ref_id = 4;
+  repeated LedgerEntryRow entries = 5;
+  Timestamp occurred_at = 6;
+}
+
+message PayoutRow {
+  string payout_id = 1;
+  string merchant_id = 2;
+  int32 type = 3;
+  Money amount = 4;
+  Money fee = 5;
+  string txid = 6;
+  string provider = 7;
+  string failure_reason = 8;
+  uint64 state_version = 9;
+  Timestamp occurred_at = 10;
+  string refund_invoice_id = 11;
+}
+
+message ReconAlertRow {
+  string alert_id = 1;
+  int32 type = 2;
+  string ref_id = 3;
+  int32 severity = 4;
+  string expected = 5;
+  string actual = 6;
+  Timestamp created_at = 7;
+  string merchant_id = 8;
+}

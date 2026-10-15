@@ -1,3 +1,3 @@
-// Пакет storage содержит доступ к хранилищам сервиса reporting:
-// GORM-репозитории, миграции и интеграцию с outbox/inbox.
+// Пакет storage содержит хранилище сервиса reporting: подключение ClickHouse,
+// goose-миграции схемы фактов и реконсиляцию Kafka-конвейера.
 package storage
