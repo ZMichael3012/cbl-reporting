@@ -114,6 +114,37 @@ services:
       ledger-stub: { condition: service_started }
     networks: [cbl-net]
 
+  # grafana - business dashboards (CBL-11.5): provisioning and dashboards are
+  # mounted read-only (as code); the plugin is baked into the image. The port is
+  # loopback-only: the stand has no SSO/authN (KI-reporting-14), production
+  # deployment and authentication are out of scope (0.6/0.7).
+  # Admin credentials: admin / cbl (GF_SECURITY_ADMIN_PASSWORD, dev stand only).
+  grafana:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: grafana/Dockerfile
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: cbl
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_ANALYTICS_FEEDBACK_LINKS_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      clickhouse: { condition: service_healthy }
+    networks: [cbl-net]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
 volumes:
   kafka-data:
   ch-data:

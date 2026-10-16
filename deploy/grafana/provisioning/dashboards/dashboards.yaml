@@ -1,0 +1,16 @@
+# Dashboard provider (CBL-11.5): dashboards are code in deploy/grafana/dashboards
+# (mounted read-only at the provider path); UI edits are not persisted and the
+# provisioned files cannot be deleted from the UI.
+apiVersion: 1
+
+providers:
+  - name: cbl
+    orgId: 1
+    folder: CBL
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

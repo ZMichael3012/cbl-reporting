@@ -1,0 +1,23 @@
+# Datasource provisioning (CBL-11.5): the reporting ClickHouse of the service stand.
+# The stand credentials (cbl/cbl) are dev-only: in production the datasource uses
+# a dedicated read-only user and TLS (0.6/14.7); Grafana itself is not exposed
+# outside loopback in dev (KI-reporting-14).
+apiVersion: 1
+
+datasources:
+  - name: ClickHouse
+    uid: cbl-clickhouse
+    type: grafana-clickhouse-datasource
+    access: proxy
+    isDefault: true
+    editable: false
+    jsonData:
+      host: clickhouse
+      port: 9000
+      protocol: native
+      username: cbl
+      defaultDatabase: reporting
+      dialTimeout: 10
+      queryTimeout: 30
+    secureJsonData:
+      password: cbl

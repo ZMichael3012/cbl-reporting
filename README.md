@@ -16,13 +16,13 @@ make test-integration  # integration (testcontainers: Kafka, ClickHouse)
 make cover             # merged unit+integration coverage
 make vet               # go vet
 make lint              # golangci-lint in Docker
-make up                # service stand: kafka, schema-registry, clickhouse, ledger-stub, reporting
+make up                # service stand: kafka, schema-registry, clickhouse, ledger-stub, reporting, grafana
 make down
 ```
 
 E2E: the run is performed by an agent following `test/e2e/E2E.md` (the ingestion,
-vocabulary, reports scenarios); artifacts go to `test/e2e/.runs/<UTC mark>/`, auxiliary
-files to `test/e2e/.additionals/`.
+vocabulary, reports, dashboards scenarios); artifacts go to `test/e2e/.runs/<UTC mark>/`,
+auxiliary files to `test/e2e/.additionals/`.
 
 ## Pipeline
 
@@ -54,3 +54,15 @@ denormalization) and `turnover` (`group_by`: `asset`, `day_asset`). The cursor i
 over the report sort keys, the limit is up to 100 rows, money is canonical decimal
 strings. The merchant API proxy is `GET /v1/reports/{report_type}` in `cbl-billing-api`
 (merchant from the token).
+
+## Business dashboards (11.5)
+
+Grafana (`http://localhost:3000`, dev credentials `admin/cbl`, loopback only) with the
+pinned ClickHouse datasource plugin baked into the image: three dashboards as code in
+`deploy/grafana/dashboards` (`cbl-payments`, `cbl-payouts`, `cbl-turnover`), provisioned
+read-only (`editable: false`); reads are `SELECT ... FINAL` only and money is shown as
+exact `Decimal` scaled per asset (`divideDecimal`), never as float. Dashboards are
+informational: balance decisions remain forbidden (T-09); production authN/TLS and the
+read-only ClickHouse user are planned in 0.6/14.7 (KI-reporting-14). The artifact unit
+test is `go test ./test/dashboards`; the e2e scenario is `E2E_Reporting_Dashboards`
+(`test/e2e/E2E.md`).

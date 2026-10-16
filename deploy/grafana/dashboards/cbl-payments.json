@@ -1,0 +1,165 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+          "rawSql": "SELECT toStartOfDay(occurred_at, 'UTC') AS time, count() AS completed FROM reporting.fact_payment_events FINAL WHERE $__timeFilter(occurred_at) AND event_type = 'payment.completed' AND asset = '$asset' AND match(merchant_id, '${merchant:pipe}') GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Completed payments per day",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+          "rawSql": "SELECT toStartOfDay(occurred_at, 'UTC') AS time, divideDecimal(toDecimal64(sumIf(expected_amount, event_type = 'payment.completed'), $decimals), toDecimal64(pow(10, $decimals), 0), $decimals) AS expected, divideDecimal(toDecimal64(sumIf(received_amount, event_type = 'payment.completed'), $decimals), toDecimal64(pow(10, $decimals), 0), $decimals) AS received FROM reporting.fact_payment_events FINAL WHERE $__timeFilter(occurred_at) AND asset = '$asset' AND match(merchant_id, '${merchant:pipe}') GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Expected vs received amount per day",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+          "rawSql": "SELECT toStartOfDay(occurred_at, 'UTC') AS time, divideDecimal(toDecimal64(sumIf(fee_amount, event_type = 'payment.completed'), $decimals), toDecimal64(pow(10, $decimals), 0), $decimals) AS fee FROM reporting.fact_payment_events FINAL WHERE $__timeFilter(occurred_at) AND event_type = 'payment.completed' AND asset = '$asset' AND match(merchant_id, '${merchant:pipe}') GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Fees per day",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 30}, {"color": "red", "value": 120}]},
+          "unit": "m"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+          "rawSql": "SELECT if(count() = 0, NULL, dateDiff('minute', max(occurred_at), now())) AS minutes FROM reporting.fact_payment_events FINAL",
+          "refId": "A"
+        }
+      ],
+      "title": "Data freshness (minutes since the last payment event)",
+      "type": "stat"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["cbl", "reporting"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": true, "text": "USDT", "value": "USDT"},
+        "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Asset",
+        "multi": false,
+        "name": "asset",
+        "options": [],
+        "query": "SELECT DISTINCT asset FROM reporting.dim_accounts WHERE asset != '' ORDER BY asset",
+        "refresh": 1,
+        "regex": "^[A-Za-z0-9._-]{1,64}$",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {"selected": true, "text": "6", "value": "6"},
+        "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+        "hide": 2,
+        "includeAll": false,
+        "multi": false,
+        "name": "decimals",
+        "options": [],
+        "query": "SELECT if(count() = 0, 6, any(decimals)) FROM reporting.dim_accounts WHERE asset = '$asset'",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+        "hide": 0,
+        "includeAll": true,
+        "label": "Merchant",
+        "multi": true,
+        "name": "merchant",
+        "options": [],
+        "query": "SELECT DISTINCT merchant_id FROM reporting.dim_accounts WHERE account_type = 'merchant' AND merchant_id != '' ORDER BY merchant_id",
+        "refresh": 1,
+        "regex": "^[A-Za-z0-9._-]{1,64}$",
+        "skipUrlSync": false,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-7d", "to": "now"},
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "CBL Payments",
+  "uid": "cbl-payments",
+  "version": 1
+}

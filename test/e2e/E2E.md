@@ -1,11 +1,11 @@
-# E2E cbl-reporting: pipeline, vocabulary and reports
+# E2E cbl-reporting: pipeline, vocabulary, reports and dashboards
 
 Run instruction for the local e2e scenarios of the service. A run is performed by an agent
 platform-independently: docker, a command shell and Go utilities from `.additionals/`.
 There are no PowerShell run scripts (customer decision of 16.10.2026, `CBL-002` section 7).
 
 Repository: `cbl-reporting`. Stand: `deploy/docker-compose.yml` (kafka, schema-registry,
-clickhouse, ledger-stub, reporting in the `app` profile).
+clickhouse, ledger-stub, reporting and grafana in the `app` profile).
 
 ## 1. Scenarios
 
@@ -14,6 +14,7 @@ clickhouse, ledger-stub, reporting in the `app` profile).
 | `E2E_Reporting_Ingestion` | migrations, pipeline reconciliation, four-topic flow into `fact_*`, values, FINAL dedup, a broken message does not stop the partition | Kafka, ClickHouse, `/readyz` |
 | `E2E_Reporting_Vocabulary` | `dim_accounts` vocabulary (Ledger gRPC plus derivation), history backfill, ingest-time enrichment, Ledger check, `/metrics` counters | Kafka, ClickHouse, Ledger gRPC, HTTP metrics |
 | `E2E_Reporting_Reports` | `ReportingService.Query`: payments, cursor pagination, merchant-filtered ledger_entries, turnover, NotFound/InvalidArgument errors | gRPC Reporting, ClickHouse |
+| `E2E_Reporting_Dashboards` | Grafana provisioning (datasource, three dashboards) and datasource computations: payments, payouts and turnover panel queries reproduce the exact expected numbers | Grafana HTTP API, ClickHouse |
 
 Minimum for a task run: the scenario affected by the task (the full set - before release
 runs and when the pipeline, vocabulary or catalog change).
@@ -27,7 +28,7 @@ runs and when the pipeline, vocabulary or catalog change).
   (needed by the grpcurl container and the stub seed).
 - Parallel runs of different services are allowed; parallel runs of this service only with
   different projects and a port override file from `.additionals/` (host ports: 9092,
-  8123/9000, 8081, 8110/9110/9310, 9040/9041).
+  8123/9000, 8081, 8110/9110/9310, 9040/9041, 3000).
 - All commands run from the repository root unless stated otherwise.
 
 ## 3. Common run order
@@ -36,17 +37,21 @@ runs and when the pipeline, vocabulary or catalog change).
 2. Stop the previous stand: `docker compose -p cbl-reporting-e2e-<MARK> -f deploy/docker-compose.yml --profile app down -v`
    (output to `compose-down.log`).
 3. Start infrastructure: `... up -d --build` (`compose-up.log`).
-4. Wait until healthy: `docker compose ps` without `starting` statuses (`compose-ps.txt`);
-   logs of all services - `... logs --no-color > compose-logs.txt`.
+4. Wait until healthy: `docker compose ps` without `starting` statuses (`compose-ps.txt`).
 5. Topics (auto-creation is disabled):
    `docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic <t> --partitions 1 --replication-factor 1`
    for `payment.events`, `ledger.events`, `payout.events`, `recon.alerts` (`prepare.log`).
 6. Start the service: `... --profile app up -d --build`; wait for `GET http://localhost:8110/readyz` = 200.
-7. Execute scenarios per sections 5-7; each output goes to `<scenario>.log`, check pairs
+   The `app` profile also starts grafana (CBL-11.5); its first image build downloads the
+   pinned ClickHouse plugin.
+7. Execute scenarios per sections 5-8; each output goes to `<scenario>.log`, check pairs
    "expected/actual" go to `<scenario>-checks.txt`. Every scenario starts from a clean
    stand: repeat steps 2-6 (down -v, up, topics, service) before it; one run mark and one
    compose project are reused for the whole run, volumes are wiped between scenarios.
-8. `summary.md` by the `.additionals/summary.template.md` template; finish with `down -v`
+8. After the scenarios: logs of all stand services -
+   `... --profile app logs --no-color > compose-logs.txt` (the `--profile app` flag is
+   required: without it the reporting and grafana containers are not included).
+9. `summary.md` by the `.additionals/summary.template.md` template; finish with `down -v`
    (`compose-down.log`) and make sure the run containers are removed.
 
 Common utilities:
@@ -63,7 +68,7 @@ Common utilities:
 Async checks run in a polling loop up to 90 s (2 s interval): facts arrive within seconds,
 the vocabulary within `DIM_REFRESH_INTERVAL` (5 s on the stand), backfill mutations up to
 30 s. On a timeout, record the last actual value in `*-checks.txt` and collect emergency
-dumps (section 8).
+dumps (section 9).
 
 ## 5. E2E_Reporting_Ingestion
 
@@ -126,7 +131,48 @@ dumps (section 8).
    (check the grpcurl exit code and error text).
 8. Checks go to `reports-checks.txt`.
 
-## 8. Mandatory run artifacts
+## 8. E2E_Reporting_Dashboards
+
+1. Full order (sections 3-4) until `readyz` (the `app` profile starts grafana as well).
+2. Data: `produce -scenario full` twice; wait for 2 payments and 2 `acc-merchant` postings
+   of `m-1` (the same waits as in the reports scenario).
+3. Vocabulary convergence: poll up to 90 s:
+   `SELECT count() FROM reporting.fact_ledger_entries FINAL WHERE account_type = 'merchant' AND merchant_id = 'm-1'` = 2
+   (the vocabulary cycle and the backfill enrich the rows; before convergence the merchant
+   filter panels would be empty, KI-reporting-05/10).
+4. Grafana API (basic auth `admin:cbl`, the credentials of the dev stand):
+   - `GET http://localhost:3000/api/health` -> contains `"database": "ok"`;
+   - `GET http://localhost:3000/api/search?type=dash-db` -> contains the uids
+     `cbl-payments`, `cbl-payouts`, `cbl-turnover` (provisioning applied);
+   - `GET http://localhost:3000/api/datasources/uid/cbl-clickhouse` -> 200 and
+     `grafana-clickhouse-datasource`;
+   - `GET http://localhost:3000/api/dashboards/uid/cbl-payments` -> 200 and the title
+     `CBL Payments`.
+5. Datasource computations (`POST http://localhost:3000/api/ds/query`; the JSON body goes
+   into a file under `<MARK>/` and is passed with `--data @<file>`: shells mangle
+   inline-JSON quotes). The range covers the fixed event time: `"from": "2026-10-14T00:00:00Z"`,
+   `"to": "2026-10-17T00:00:00Z"`; the `$__timeFilter` macro is resolved from the range
+   (the same way as in the dashboard panels). Body skeleton:
+   `{"queries":[{"refId":"A","datasource":{"type":"grafana-clickhouse-datasource","uid":"cbl-clickhouse"},"rawSql":"<query>"}],"from":"<from>","to":"<to>"}`.
+   Every expected marker is a `concat` of the checked value (exact strings in the JSON):
+   - payments (`ds-payments.json`):
+     `SELECT concat('payments_completed=', toString(countIf(event_type = 'payment.completed'))) AS chk FROM reporting.fact_payment_events FINAL WHERE $__timeFilter(occurred_at) AND asset = 'USDT' AND match(merchant_id, 'm-1')`
+     -> the response contains `payments_completed=2`;
+   - payouts (`ds-payouts.json`):
+     `SELECT concat('payouts_requested=', toString(countIf(event_type = 'payout.requested'))) AS chk FROM reporting.fact_payouts FINAL WHERE $__timeFilter(occurred_at) AND asset = 'USDT' AND match(merchant_id, 'm-1')`
+     -> `payouts_requested=2`;
+   - turnover (`ds-turnover.json`):
+     `SELECT concat('turnover_credit=', toString(intDiv(sumIf(amount, direction = 'credit'), toUInt64(pow(10, 6)))), '.', leftPad(toString(modulo(sumIf(amount, direction = 'credit'), toUInt64(pow(10, 6)))), 6, '0'), ';entries=', toString(countIf(account_type = 'merchant'))) AS chk FROM reporting.fact_ledger_entries FINAL WHERE $__timeFilter(occurred_at) AND asset = 'USDT' AND account_type = 'merchant'`
+     -> `turnover_credit=200.000000;entries=2` (the integer and fraction parts are built
+     with integer arithmetic: `toString` of `Decimal` strips trailing zeros and cannot
+     serve as a fixed-scale check; the panels themselves use exact `divideDecimal`);
+   - money panel (the `Expected vs received` patterns of `cbl-payments.json`), the sums
+     are formatted exactly the same way:
+     `SELECT concat('expected=', toString(intDiv(sumIf(expected_amount, event_type = 'payment.completed'), toUInt64(pow(10, 6)))), '.', leftPad(toString(modulo(sumIf(expected_amount, event_type = 'payment.completed'), toUInt64(pow(10, 6)))), 6, '0'), ';received=', toString(intDiv(sumIf(received_amount, event_type = 'payment.completed'), toUInt64(pow(10, 6)))), '.', leftPad(toString(modulo(sumIf(received_amount, event_type = 'payment.completed'), toUInt64(pow(10, 6)))), 6, '0'), ';fee=', toString(intDiv(sumIf(fee_amount, event_type = 'payment.completed'), toUInt64(pow(10, 6)))), '.', leftPad(toString(modulo(sumIf(fee_amount, event_type = 'payment.completed'), toUInt64(pow(10, 6)))), 6, '0')) AS chk FROM reporting.fact_payment_events FINAL WHERE $__timeFilter(occurred_at) AND event_type = 'payment.completed' AND asset = 'USDT' AND match(merchant_id, 'm-1')`
+     -> `expected=200.000000;received=200.000000;fee=2.000000`.
+6. Checks go to `dashboards-checks.txt`.
+
+## 9. Mandatory run artifacts
 
 - `summary.md` (template `.additionals/summary.template.md`; PASS/FAIL verdict, steps,
   key values, artifact list, time);
@@ -138,14 +184,14 @@ dumps (section 8).
   (`docker compose ps`), fact/vocabulary table snapshots (`SELECT * ... LIMIT 20`),
   service log fragments with `request_id`.
 
-## 9. Auxiliary files (.additionals)
+## 10. Auxiliary files (.additionals)
 
 - `produce/` - Go test event producer (scenarios full/duplicate/broken/sentinel, `-live`);
 - `ledgerstub/` - the test Ledger sources (the `ledger-stub` image for compose);
 - `summary.template.md` - the `summary.md` template;
 - `inventory.md` - the list of auxiliary files and their purpose.
 
-## 10. Cleanup
+## 11. Cleanup
 
 `docker compose -p cbl-reporting-e2e-<MARK> -f deploy/docker-compose.yml --profile app down -v`
 at the end; `.runs/` is not committed; a repeated run must start from a clean stand.

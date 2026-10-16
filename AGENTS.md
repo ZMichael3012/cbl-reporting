@@ -18,11 +18,15 @@ service compose; the Kafka engine + materialized view pipeline over the topics `
 `ListMerchantAccounts` + derivation of system accounts), enrichment of ledger facts and
 history backfill; periodic reconciliation against the Ledger `ListEntries` (metrics and
 logs); gRPC `billing.reporting.v1.ReportingService.Query` (the 11.4 report catalog);
-administrative `/healthz`/`/readyz`, gRPC health and `/metrics` counters.
+business dashboards (11.5): the Grafana runtime (pinned image and plugin, dashboards as
+JSON code, read-only provisioning), the `test/dashboards` artifact validation and the
+`E2E_Reporting_Dashboards` scenario; administrative `/healthz`/`/readyz`, gRPC health and
+`/metrics` counters.
 
 Out of scope: the `/v1/reports` proxy (`cbl-billing-api` domain, 11.4); new report types
-(an additive contract task after 15.4); dashboards
-(11.5); `recon.alerts` and gateway business reconciliation (9.x, Reconciler); retention/TTL
+(an additive contract task after 15.4); Grafana production deployment, SSO/authN/TLS
+(0.6/0.7, KI-reporting-14) and Grafana alerting rules (14.4); `recon.alerts` and gateway
+business reconciliation (9.x, Reconciler); retention/TTL
 and quotas (14.7); a prod ClickHouse cluster (0.6); mTLS and gRPC authorization to the
 Ledger (0.6, KI-ledger-02); moving the `account_id` derivation into `cbl-kit` (KI-ledger-08,
 until 7.4/10.2); Kafka Connect (T-10: only under strict exactly-once).
@@ -65,6 +69,8 @@ deploy/format_schemas/  # decoding wire schema (cbl-protos@cf-3.4 flattening)
 deploy/clickhouse-config/ # format_schema_path for the service ClickHouse
 test/producer/          # test protobuf events (integration/e2e)
 test/ledgerstub/        # test LedgerService (gRPC) for integration/e2e
+test/dashboards/        # artifact validation of the dashboard JSON (unit, CBL-11.5)
+deploy/grafana/         # Grafana runtime: Dockerfile (pinned plugin), provisioning, dashboards (CBL-11.5)
 test/e2e/               # E2E.md (run instructions), .additionals (utilities), .runs (artifacts)
 ```
 
@@ -78,7 +84,8 @@ absolute path - `format_schema_path` is used); `_headers` in 24.8 is
 shadows it for the remaining SELECT expressions (tuples are renamed in the MV subquery);
 vocabulary enrichment is a JOIN with `FINAL` on the right side (T-RPT-07); backfill uses
 mutations with a narrow predicate (T-RPT-08); reconciliation uses a window with a lag and
-round-robin over accounts (T-RPT-09).
+round-robin over accounts (T-RPT-09); business dashboards are Grafana JSON code with
+read-only provisioning (T-RPT-11; never balance decisions, T-09).
 
 Libraries: the standard set (`CBL-002` section 6): Gin, zap, grpc, goose (clickhouse
 dialect), `clickhouse-go/v2`; testcontainers (Kafka, ClickHouse). `AutoMigrate` is forbidden.
@@ -92,18 +99,19 @@ make test-integration  # integration (testcontainers: Kafka, ClickHouse)
 make cover             # merged unit+integration coverage (cover.out)
 make vet               # go vet ./... (+ integration e2e tags)
 make lint              # golangci-lint in Docker (services/ context for cbl-kit)
-make up                # stand: kafka, schema-registry, clickhouse, ledger-stub, reporting
+make up                # stand: kafka, schema-registry, clickhouse, ledger-stub, reporting, grafana
 make down              # stand + volume
 ```
 
 E2E: the run is performed by an agent following `test/e2e/E2E.md` (platform-independent:
-bring up the stand, execute the ingestion/vocabulary/reports scenarios, save artifacts to
-`test/e2e/.runs/<UTC mark>/`, mandatory `summary.md`); there are no PowerShell run
-scripts, auxiliary files live in `test/e2e/.additionals/` (`CBL-002` section 7).
+bring up the stand, execute the ingestion/vocabulary/reports/dashboards scenarios, save
+artifacts to `test/e2e/.runs/<UTC mark>/`, mandatory `summary.md`); there are no PowerShell
+run scripts, auxiliary files live in `test/e2e/.additionals/` (`CBL-002` section 7).
 
 ## 5. Ports and environment
 
-HTTP `8110`, gRPC `9110`, metrics `9310`.
+HTTP `8110`, gRPC `9110`, metrics `9310`. Grafana `127.0.0.1:3000` (business dashboards,
+loopback only, dev credentials `admin/cbl`; KI-reporting-14).
 Variables: `CLICKHOUSE_DSN` (required, `clickhouse://cbl:...@host:9000/reporting`),
 `KAFKA_BROKERS` (required; the internal listener for ClickHouse, `kafka:29092` in compose),
 `SCHEMA_PATH` (`events.proto` relative to the ClickHouse `format_schema_path`; the Kafka
@@ -144,6 +152,8 @@ The SLO is refined in task 14.4. Pipeline latency is seconds; the vocabulary fol
 refresh interval, reconciliation the interval with a lagged window. `/metrics` serves the
 vocabulary, backfill and reconciliation counters (partially closing KI-reporting-04); the
 full set (consumer lag, latency, Prometheus client) comes after 0.7. Pipeline load - 14.2.
+Business dashboards: `http://localhost:3000` (folder `CBL`), informational only (T-09),
+not an SLO surface.
 
 ## 8. Trade-offs
 
@@ -159,6 +169,7 @@ full set (consumer lag, latency, Prometheus client) comes after 0.7. Pipeline lo
 | T-RPT-08 | History backfill uses `ALTER UPDATE ... WHERE account_type = ''` mutations over vocabulary accounts (a per-cycle limit, only vocabulary accounts selected in a deterministic order) | pinpoint rewrite, idempotence, convergence to the full vocabulary, the cycle budget does not starve on legacy rows | mutations are asynchronous and rewrite parts; a large lagging volume needs several cycles | `WHERE account_type = ''` is safe and converges; the `BACKFILL_LIMIT` cap; the mutation queue and scan cost - KI-reporting-09/11, profile 14.2 |
 | T-RPT-09 | Ledger reconciliation: round-robin over vocabulary accounts, window `[now-2W, now-W)`, pages are aggregated page by page, the result is logs and counters | there is no global transaction enumeration in the Ledger contract; a complete event loss by an account is detected; the lagged window suppresses false missing; memory holds only window transactions | a full vocabulary walk is stretched (accountsPerCycle per cycle); false missing when event delay exceeds W; a single check of the window; the in-memory cursor - one writer per stand (KI-reporting-12) | the window and limits are configurable; on a complete batch failure the cursor does not move; discrepancies are diagnostics (T-09), not alerts or money decisions; calibration - 14.2 |
 | T-RPT-10 | Query reports: a closed catalog in code, a keyset cursor (sort keys), `limit+1` and a served limit ≤100, `group_by` only from the type whitelist, money as canonical decimal strings | user input never reaches SQL; pagination is stable under inserts; no float; catalog drift is visible to tests | a new report is a task with a catalog version; the keyset cursor is tied to the report sorting; aggregates are per-asset only (sums of different scales never mix) | the cursor is opaque and validated; contract limits; the catalog lives in the 11.4 spec |
+| T-RPT-11 | Business dashboards: Grafana with the pinned ClickHouse plugin baked into the image, dashboards as JSON code with read-only provisioning (`editable: false`, `allowUiUpdates: false`), money as exact `Decimal` (`divideDecimal`) in SQL | a mature runtime without custom code; dashboards are versioned with the service that owns the data (T-RPT-03); no runtime plugin downloads; no float in SQL | a second UI runtime on the stand; Grafana/plugin version coupling; the JSON blocks duplicate by design (library panels are a deliberate later task); dev basic auth only | loopback-only port; artifact unit test `test/dashboards`; URL-sync variables regex-guarded; plugin signatures verified by Grafana at startup (fail-closed); production authN/TLS and the read-only ClickHouse user - 0.6/14.7 (KI-reporting-14) |
 
 ## 9. Known issues
 
@@ -177,6 +188,7 @@ full set (consumer lag, latency, Prometheus client) comes after 0.7. Pipeline lo
 | KI-reporting-11 | The cost of periodic FINAL scans of the facts (coverage refresh, the unenriched select, reconciliation aggregates), of the `Query` report selects (the `merchant_id` filter and the report order do not match the fact sorting key, so each page is a scan with sorting) and of backfill mutations is not measured at large volumes | on the target profile (14.2) cycles and reports may compete with ingestion | measurement in 14.2; if confirmed - projections/skip indexes for the actual predicates (`merchant_id`, report order), incremental state of unenriched accounts, batch mutations | open |
 | KI-reporting-12 | The vocabulary and reconciliation workers do not coordinate between replicas: duplicate Ledger calls and mutations, the reconciliation cursor is in memory | with N instances there is extra load and a desynchronized walk; correctness does not suffer (idempotent) | single-writer (advisory lock) or an explicit convention fixed before scaling (0.6/14.2) | open |
 | KI-reporting-13 | gRPC `ReportingService.Query` has no authN/mTLS, and an empty `merchant_id` for lists means all merchants (an internal call per FR-2) | with access to port 9110 any caller reads events of all merchants bypassing the BFF; in dev the port is published to loopback only (127.0.0.1) | mTLS/authorization and a mandatory call subject - 0.6 (following KI-ledger-02); do not publish the port outside the trusted zone; prod is forbidden before 0.6; the server timeout interceptor - 0.6/14.7 | open |
+| KI-reporting-14 | Grafana has no SSO/authN/TLS and runs with dev basic credentials (`admin/cbl`, loopback only); its datasource uses the write-capable `cbl` ClickHouse user, so an authenticated session can execute ad-hoc SQL (including mutations) through Explore or `POST /api/ds/query`; any `cbl-net` container can reach the Grafana API; viewers are not scoped per merchant (aggregates across merchants are visible) | with access to loopback (dev) or the stand network a caller bypasses the reporting access paths; a multi-user prod would expose cross-merchant aggregates | SSO/authN/TLS and a dedicated read-only ClickHouse user/profile - 0.6/14.7; do not publish port 3000 outside the trusted zone; prod is forbidden before 0.6; committed panel SQL is read-only and unit-enforced, URL-sync variables are regex-guarded; dashboards are informational (T-09) | open |
 
 ## 10. Task journal
 
@@ -186,6 +198,7 @@ full set (consumer lag, latency, Prometheus client) comes after 0.7. Pipeline lo
 | CBL-11.3 | 2026-10-16 | done (the dim_accounts vocabulary: merchant accounts from Ledger gRPC by fact coverage, system accounts by golden-vector derivation; input enrichment via JOIN in the MV; history backfill; Ledger reconciliation with a window and round-robin; the Ledger stub and e2e (the vocabulary scenario; with CBL-16.2 - E2E.md); coverage 82.7%) | `.specs/CBL-11.3-ledger-sync.md` | d977610 |
 | CBL-11.4 | 2026-10-16 | done (gRPC ReportingService.Query: the closed payments/payouts/ledger_entries/turnover catalog, a keyset cursor with key validation, limits, canonical money; integration tests on ClickHouse and e2e via grpcurl (with CBL-16.2 - E2E.md); coverage 86.5%) | `.specs/CBL-11.4-reports-query.md` | 49a9480 |
 | CBL-16.2 | 2026-10-16 | done (English comments and documentation across the repository: code, tests, configs, specs (11.2-11.4 translated), AGENTS.md, README; e2e runs via `test/e2e/E2E.md` with utilities in `.additionals/` and artifacts in `.runs/`; validation run PASS; coverage unchanged 86.5%) | `.specs/CBL-16.2-conventions.md` | this commit |
+| CBL-11.5 | 2026-10-16 | done (Grafana business dashboards: pinned runtime and ClickHouse plugin baked at build, dashboards as code (payments/payouts/turnover) with exact Decimal money and regex-guarded variables, artifact unit test `test/dashboards`, e2e scenario `E2E_Reporting_Dashboards` PASS 10/10; coverage unchanged 86.5%) | `.specs/CBL-11.5-dashboards.md` | this commit |
 
 ## 11. Runbook
 
@@ -255,3 +268,31 @@ Query reports (11.4):
 4. A heavy period (an aggregate over the whole history): narrow the window; quotas and the
    readonly profile - 14.7; internal errors - ERROR `report query failed` in the logs
    (details never reach the client), channel degradation - KI-reporting-13.
+
+Dashboards (11.5):
+
+1. Dashboards missing in Grafana: check the container health (`docker compose --profile app ps`,
+   the healthcheck calls `/api/health`), the provisioning mounts
+   (`/etc/grafana/provisioning`, `/var/lib/grafana/dashboards`, read-only) and provider
+   errors in the grafana logs; provisioned dashboards appear within
+   `updateIntervalSeconds` (30 s).
+2. Datasource test fails or panels show an error: `GET /api/datasources/uid/cbl-clickhouse`
+   and the grafana log lines about `clickhouse`: check the host (`clickhouse:9000`), the
+   native protocol and credentials (`cbl/cbl`); the plugin is baked at build - a download
+   failure fails the image build visibly and there is no runtime fallback.
+3. Empty variables or empty panels: the vocabulary has not converged yet
+   (`DIM_REFRESH_INTERVAL`): `decimals` falls back to 6, the `asset`/`merchant` lists stay
+   empty until `dim_accounts` is populated, merchant-scoped rows wait for the backfill
+   (KI-reporting-05/10).
+4. Money looks scaled wrong (off by orders of magnitude): panels must scale with
+   `divideDecimal(toDecimal64(x, $decimals), toDecimal64(pow(10, $decimals), 0), $decimals)`;
+   `go test ./test/dashboards` rejects regressions, including a bare `$merchant` or a
+   missing `$__timeFilter`.
+5. Host port 3000 busy (parallel stands): stop the other stand or override the publish;
+   the port is loopback-only by design (KI-reporting-14).
+6. Changing dashboards: edit the JSON files (dashboards are code; UI edits are not
+   persisted), run `go test ./test/dashboards`, then re-run `E2E_Reporting_Dashboards`.
+7. Users see cross-merchant aggregates: that is the current trust model of the stand
+   (no per-viewer scoping, KI-reporting-14); the informational `Turnover by account type
+   (platform aggregate)` panel is platform-wide by design (11.4 deferred platform
+   aggregates to 11.5).
