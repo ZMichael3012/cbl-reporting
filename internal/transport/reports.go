@@ -13,15 +13,15 @@ import (
 	"github.com/cbl/cbl-reporting/internal/reports"
 )
 
-// ReportsServer реализует billing.reporting.v1.ReportingService поверх
-// сервиса отчетов.
+// ReportsServer implements billing.reporting.v1.ReportingService over the
+// reports service.
 type ReportsServer struct {
 	reportingv1.UnimplementedReportingServiceServer
 	service *reports.Service
 	log     *zap.Logger
 }
 
-// NewReportsServer собирает gRPC-сервер отчетов; nil-логгер заменяется пустым.
+// NewReportsServer assembles the reports gRPC server; a nil logger is replaced by an empty one.
 func NewReportsServer(service *reports.Service, log *zap.Logger) *ReportsServer {
 	if log == nil {
 		log = zap.NewNop()
@@ -29,8 +29,8 @@ func NewReportsServer(service *reports.Service, log *zap.Logger) *ReportsServer 
 	return &ReportsServer{service: service, log: log}
 }
 
-// Query возвращает страницу отчета по каталогу; доменные ошибки переводятся в
-// коды gRPC (NotFound/InvalidArgument), внутренние детали не раскрываются.
+// Query returns a report page from the catalog; domain errors are mapped to
+// gRPC codes (NotFound/InvalidArgument), internal details are not disclosed.
 func (s *ReportsServer) Query(ctx context.Context, request *reportingv1.QueryRequest) (*reportingv1.QueryResponse, error) {
 	query := reports.QueryRequest{
 		ReportType: request.GetReportType(),
@@ -58,8 +58,8 @@ func (s *ReportsServer) Query(ctx context.Context, request *reportingv1.QueryReq
 	return &reportingv1.QueryResponse{Rows: rows, NextCursor: page.NextCursor}, nil
 }
 
-// mapQueryError переводит доменные ошибки в коды gRPC; внутренние ошибки
-// логируются без деталей клиенту.
+// mapQueryError maps domain errors to gRPC codes; internal errors are
+// logged without disclosing details to the client.
 func (s *ReportsServer) mapQueryError(err error, reportType string) error {
 	switch {
 	case errors.Is(err, reports.ErrUnknownReport):

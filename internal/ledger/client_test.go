@@ -8,8 +8,8 @@ import (
 	commonv1 "github.com/cbl/cbl-protos/gen/go/billing/common/v1"
 )
 
-// TestDirectionName проверяет маппинг направлений контракта в имена колонок
-// фактов и отказ на неизвестных значениях.
+// TestDirectionName verifies the mapping of contract directions to fact column
+// names and rejection of unknown values.
 func TestDirectionName(t *testing.T) {
 	debit, err := directionName(commonv1.Direction_DIRECTION_DEBIT)
 	require.NoError(t, err)

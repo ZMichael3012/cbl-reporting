@@ -23,7 +23,7 @@ import (
 	"github.com/cbl/cbl-reporting/test/ledgerstub"
 )
 
-// startClickHouse поднимает ClickHouse на реальном контейнере.
+// startClickHouse starts ClickHouse in a real container.
 func startClickHouse(t *testing.T) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
@@ -63,12 +63,12 @@ func startClickHouse(t *testing.T) *sql.DB {
 	return db
 }
 
-// chQuote экранирует литерал тестовых INSERT-ов.
+// chQuote escapes a literal of test INSERTs.
 func chQuote(value string) string {
 	return "'" + strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `'`, `\'`) + "'"
 }
 
-// insertFact вставляет проводку факта со временем в окне сверки.
+// insertFact inserts a fact entry with a timestamp inside the reconciliation window.
 func insertFact(t *testing.T, db *sql.DB, transactionID, accountID, direction string, amount int64, occurredAt time.Time) {
 	t.Helper()
 	query := fmt.Sprintf(`INSERT INTO reporting.fact_ledger_entries
@@ -82,7 +82,7 @@ func insertFact(t *testing.T, db *sql.DB, transactionID, accountID, direction st
 	require.NoError(t, err)
 }
 
-// seedDim вносит строку словаря.
+// seedDim inserts a dictionary row.
 func seedDim(t *testing.T, db *sql.DB, accountID string) {
 	t.Helper()
 	require.NoError(t, storage.InsertDimAccounts(context.Background(), db, []storage.DimAccount{{
@@ -90,8 +90,8 @@ func seedDim(t *testing.T, db *sql.DB, accountID string) {
 	}}))
 }
 
-// TestLedgerCheckIntegration проверяет сверку: совпадение, все классы
-// расхождений, усечение по страницам и деградацию при недоступном Ledger.
+// TestLedgerCheckIntegration verifies reconciliation: a match, all discrepancy
+// classes, page truncation and degradation with an unavailable Ledger.
 func TestLedgerCheckIntegration(t *testing.T) {
 	ctx := context.Background()
 	db := startClickHouse(t)
@@ -123,12 +123,12 @@ func TestLedgerCheckIntegration(t *testing.T) {
 	summary, err := checker.Cycle(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 2, summary.Accounts)
-	assert.Equal(t, 2, summary.Checked, "совпадающие данные и пустой счет - не расхождения")
+	assert.Equal(t, 2, summary.Checked, "matching data and an empty account are not discrepancies")
 	assert.Zero(t, summary.Missing+summary.Extra+summary.Mismatch)
 	assert.Equal(t, int64(2), counters.CheckAccounts.Load())
 
-	// Управляемые расхождения: проводка только в Ledger, только в фактах и
-	// расхождение сумм.
+	// Controlled discrepancies: an entry only in Ledger, only in the facts, and
+	// an amount mismatch.
 	missingTx := "tx-missing-" + uuid.NewString()
 	mismatchTx := "tx-mismatch-" + uuid.NewString()
 	extraTx := "tx-extra-" + uuid.NewString()
@@ -150,8 +150,9 @@ func TestLedgerCheckIntegration(t *testing.T) {
 	assert.Equal(t, int64(1), counters.CheckExtra.Load())
 	assert.Equal(t, int64(1), counters.CheckMismatch.Load())
 
-	// Строки за окном не участвуют в сверке: проводка старше окна не дает
-	// missing_in_reporting (сравниваются только "закрытые" окна).
+	// Rows outside the window do not participate in reconciliation: an entry older
+	// than the window does not produce missing_in_reporting (only "closed" windows
+	// are compared).
 	outOfWindow := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Millisecond)
 	oldTx := "tx-old-" + uuid.NewString()
 	stub.SeedEntries("a1",
@@ -161,10 +162,10 @@ func TestLedgerCheckIntegration(t *testing.T) {
 	stub.SeedEntries("a2")
 	summary, err = checker.Cycle(ctx)
 	require.NoError(t, err)
-	assert.Zero(t, summary.Missing, "проводки вне окна не сверяются")
+	assert.Zero(t, summary.Missing, "entries outside the window are not reconciled")
 	assert.Zero(t, summary.Mismatch)
 
-	// Превышение лимита страниц: счет пропускается со счетчиком truncated.
+	// Page limit exceeded: the account is skipped with the truncated counter.
 	truncatedAccount := "a3"
 	seedDim(t, db, truncatedAccount)
 	var entries []ledgerstub.Entry
@@ -179,31 +180,31 @@ func TestLedgerCheckIntegration(t *testing.T) {
 	require.NoError(t, err)
 	summary, err = truncated.Cycle(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 1, summary.Truncated, "страницы сверх лимита - пропуск")
-	assert.Zero(t, summary.Missing+summary.Mismatch, "усеченный счет без классификации")
+	assert.Equal(t, 1, summary.Truncated, "pages beyond the limit mean a skip")
+	assert.Zero(t, summary.Missing+summary.Mismatch, "a truncated account is not classified")
 	assert.Equal(t, int64(1), counters.CheckTruncated.Load())
 
-	// Курсор обхода: продвигается за обработанные счета; полный сбой порции
-	// (Ledger недоступен) оставляет курсор на месте - следующий цикл повторит
-	// ту же порцию, цикл не падает.
+	// Walk cursor: it advances past processed accounts; a full failure of a portion
+	// (Ledger unavailable) leaves the cursor in place - the next cycle repeats the
+	// same portion, the cycle does not fail.
 	cursored, err := New(db, client, time.Minute, window, 2, 1000, 10, nil, counters)
 	require.NoError(t, err)
 	first, err := cursored.Cycle(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 2, first.Accounts)
-	require.NotEmpty(t, cursored.cursor, "курсор сдвинулся за успешные счета")
+	require.NotEmpty(t, cursored.cursor, "the cursor advanced past successful accounts")
 	cursorBefore := cursored.cursor
 	stub.Stop()
 	summary, err = cursored.Cycle(ctx)
-	require.NoError(t, err, "ошибки счетов не роняют цикл")
+	require.NoError(t, err, "account errors do not bring the cycle down")
 	assert.Equal(t, 2, summary.Errors)
 	assert.Zero(t, summary.Checked)
-	assert.Equal(t, cursorBefore, cursored.cursor, "полный сбой порции не двигает курсор")
+	assert.Equal(t, cursorBefore, cursored.cursor, "a full failure of the portion does not move the cursor")
 	assert.Equal(t, int64(2), counters.CheckErrors.Load())
 }
 
-// TestLedgerCheckRoundRobinIntegration проверяет постраничный обход словаря с
-// заворотом: за два цикла сверяются все счета, курсор не теряется.
+// TestLedgerCheckRoundRobinIntegration verifies the paginated dictionary walk with
+// a wrap: all accounts are reconciled in two cycles, the cursor is not lost.
 func TestLedgerCheckRoundRobinIntegration(t *testing.T) {
 	ctx := context.Background()
 	db := startClickHouse(t)
@@ -225,13 +226,13 @@ func TestLedgerCheckRoundRobinIntegration(t *testing.T) {
 
 	first, err := checker.Cycle(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, first.Accounts, "порция за цикл ограничена")
+	assert.Equal(t, 2, first.Accounts, "the portion per cycle is bounded")
 	second, err := checker.Cycle(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, second.Accounts, "заворот добирает остаток и начинает круг")
+	assert.Equal(t, 2, second.Accounts, "the wrap picks up the remainder and starts a new lap")
 	third, err := checker.Cycle(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 2, third.Accounts)
-	// За три цикла каждая порция покрыта по два раза, все счета пройдены.
+	// In three cycles each portion is covered twice and all accounts are walked.
 	assert.Equal(t, 6, first.Checked+second.Checked+third.Checked)
 }

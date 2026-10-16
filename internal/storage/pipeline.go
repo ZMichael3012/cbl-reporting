@@ -13,36 +13,36 @@ import (
 	"go.uber.org/zap"
 )
 
-// hostPortPattern задает допустимую форму одного брокера в списке (защита SQL
-// от инъекции через конфигурацию окружения).
+// hostPortPattern defines the allowed form of a single broker in the list
+// (protection of SQL from injection via the environment configuration).
 var hostPortPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}$`)
 
-// schemaPathPattern задает допустимую форму пути wire-схемы: имя файла
-// относительно format_schema_path сервера ClickHouse (абсолютный путь Kafka
-// engine запрещает; переходы вверх запрещены отдельно).
+// schemaPathPattern defines the allowed form of the wire schema path: a file
+// name relative to the ClickHouse server format_schema_path (the Kafka engine
+// forbids an absolute path; upward traversal is forbidden separately).
 var schemaPathPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9/._-]*$`)
 
-// TopicSpec описывает конвейер факта: Kafka-таблицу и materialized view.
+// TopicSpec describes a fact pipeline: the Kafka table and the materialized view.
 type TopicSpec struct {
-	// FactTable задает целевую таблицу фактов из миграций.
+	// FactTable defines the target fact table from migrations.
 	FactTable string
-	// KafkaTable задает таблицу Kafka engine.
+	// KafkaTable defines the Kafka engine table.
 	KafkaTable string
-	// ViewName задает имя materialized view.
+	// ViewName defines the materialized view name.
 	ViewName string
-	// Topic задает топик Kafka.
+	// Topic defines the Kafka topic.
 	Topic string
-	// Group задает consumer group ClickHouse.
+	// Group defines the ClickHouse consumer group.
 	Group string
-	// Message задает сообщение wire-схемы (deploy/format_schemas/events.proto).
+	// Message defines the wire schema message (deploy/format_schemas/events.proto).
 	Message string
-	// Columns задает DDL колонок Kafka-таблицы.
+	// Columns defines the DDL of the Kafka table columns.
 	Columns string
-	// Select задает выборку materialized view (без FROM).
+	// Select defines the materialized view query (without FROM).
 	Select string
 }
 
-// Pipeline реконсилирует Kafka-таблицы и materialized view ClickHouse.
+// Pipeline reconciles Kafka tables and materialized views of ClickHouse.
 type Pipeline struct {
 	db         *sql.DB
 	brokers    string
@@ -51,8 +51,9 @@ type Pipeline struct {
 	log        *zap.Logger
 }
 
-// NewPipeline собирает конвейер; брокеры и путь схемы валидируются fail-fast
-// (значения подставляются в DDL реконсиляции).
+// NewPipeline assembles the pipeline; brokers and the schema path are
+// validated fail-fast (the values are interpolated into the reconciliation
+// DDL).
 func NewPipeline(db *sql.DB, brokers, schemaPath string, log *zap.Logger) (*Pipeline, error) {
 	if db == nil {
 		return nil, errors.New("clickhouse db is required")
@@ -71,10 +72,10 @@ func NewPipeline(db *sql.DB, brokers, schemaPath string, log *zap.Logger) (*Pipe
 	return &Pipeline{db: db, brokers: brokers, schemaPath: schemaPath, specs: DefaultSpecs(), log: log}, nil
 }
 
-// Reconcile приводит Kafka-таблицы и materialized view к конфигурации
-// окружения и определениям текущего бинарника: создает отсутствующие пары,
-// при дрейфе (брокеры, схема, колонки, выборка) пересоздает пару, лечит
-// частичное состояние (таблица без view). Данные фактов не затрагиваются.
+// Reconcile brings Kafka tables and materialized views to the environment
+// configuration and the definitions of the current binary: it creates missing
+// pairs, recreates a pair on drift (brokers, schema, columns, query) and
+// heals a partial state (a table without a view). Fact data is not affected.
 func (p *Pipeline) Reconcile(ctx context.Context) error {
 	for _, spec := range p.specs {
 		if err := p.reconcileTopic(ctx, spec); err != nil {
@@ -84,8 +85,8 @@ func (p *Pipeline) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-// reconcileTopic сверяет фактическое состояние пары таблица+view с ожидаемым
-// отпечатком DDL и приводит его к ожидаемому виду.
+// reconcileTopic compares the actual state of a table+view pair with the
+// expected DDL fingerprint and brings it to the expected form.
 func (p *Pipeline) reconcileTopic(ctx context.Context, spec TopicSpec) error {
 	expectedComment := p.fingerprint(spec)
 	var actualComment string
@@ -99,10 +100,10 @@ func (p *Pipeline) reconcileTopic(ctx context.Context, spec TopicSpec) error {
 
 	switch {
 	case tableMissing:
-		// пары нет: создаем
+		// the pair is missing: create it
 	case actualComment != expectedComment:
-		// определения (SQL или конфигурация окружения) изменились:
-		// пересоздаем пару целиком, иначе MV остался бы на старом определении
+		// definitions (SQL or environment configuration) changed:
+		// recreate the whole pair, otherwise the MV would stay on the old definition
 		p.log.Warn("kafka pipeline configuration changed, recreating",
 			zap.String("table", spec.KafkaTable),
 			zap.String("brokers", p.brokers))
@@ -114,7 +115,7 @@ func (p *Pipeline) reconcileTopic(ctx context.Context, spec TopicSpec) error {
 		}
 		tableMissing = true
 	default:
-		// таблица актуальна: view мог отсутствовать (сбой между CREATE-ами)
+		// the table is up to date: the view could be missing (a failure between CREATEs)
 		var viewExists uint64
 		if err := p.db.QueryRowContext(ctx,
 			"SELECT count() FROM system.tables WHERE database = 'reporting' AND name = ?",
@@ -140,17 +141,17 @@ func (p *Pipeline) reconcileTopic(ctx context.Context, spec TopicSpec) error {
 	return nil
 }
 
-// fingerprint возвращает отпечаток ожидаемого определения пары (SQL обоих
-// объектов): смена брокеров, схемы, колонок или выборки меняет отпечаток и
-// запускает пересоздание.
+// fingerprint returns the fingerprint of the expected pair definition (SQL of
+// both objects): a change of brokers, schema, columns or query changes the
+// fingerprint and triggers recreation.
 func (p *Pipeline) fingerprint(spec TopicSpec) string {
 	sum := sha256.Sum256([]byte(
 		BuildKafkaTableDDL(spec, p.brokers, p.schemaPath, "") + "\n" + BuildViewDDL(spec)))
 	return "cbl-pipeline:" + hex.EncodeToString(sum[:])[:16]
 }
 
-// BuildKafkaTableDDL собирает DDL таблицы Kafka engine для топика; comment
-// задает отпечаток конфигурации (пустая строка - без COMMENT).
+// BuildKafkaTableDDL builds the Kafka engine table DDL for the topic; comment
+// defines the configuration fingerprint (an empty string - without COMMENT).
 func BuildKafkaTableDDL(spec TopicSpec, brokers, schemaPath, comment string) string {
 	ddl := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS reporting.%s (%s)
 ENGINE = Kafka
@@ -165,14 +166,14 @@ kafka_num_consumers = 1`,
 	return ddl
 }
 
-// BuildViewDDL собирает DDL materialized view, пишущего в таблицу фактов.
+// BuildViewDDL builds the materialized view DDL that writes to the fact table.
 func BuildViewDDL(spec TopicSpec) string {
 	return fmt.Sprintf("CREATE MATERIALIZED VIEW IF NOT EXISTS reporting.%s TO reporting.%s AS %s",
 		spec.ViewName, spec.FactTable, spec.Select)
 }
 
-// DefaultSpecs описывает конвейеры четырех топиков (CBL-003 раздел 6,
-// маппинг колонок - CBL-11.1 раздел 6).
+// DefaultSpecs describes the pipelines of the four topics (CBL-003 section 6,
+// column mapping - CBL-11.1 section 6).
 func DefaultSpecs() []TopicSpec {
 	return []TopicSpec{
 		{
@@ -188,10 +189,10 @@ received_amount Tuple(minor_units Int64, asset String, decimals UInt32),
 fee Tuple(minor_units Int64, asset String, decimals UInt32),
 quote_id String, rate String, txid String, state_version UInt64,
 occurred_at Tuple(seconds Int64, nanos Int32)`,
-			// Подзапрос переименовывает кортежи: алиас, совпадающий с именем
-			// колонки, перекрывает ее для остальных выражений SELECT (проверено
-			// на ClickHouse 24.8). Время - секунды плюс наносекунды, итоговая
-			// колонка округляет до миллисекунд (DateTime64(3)).
+			// The subquery renames the tuples: an alias matching a column
+			// name shadows it for the remaining SELECT expressions (verified
+			// on ClickHouse 24.8). Time is seconds plus nanoseconds; the
+			// resulting column rounds to milliseconds (DateTime64(3)).
 			Select: `SELECT arrayFirst(x -> x.1 = 'event_id', _headers).2 AS event_id, payment_id, merchant_id,
 arrayFirst(x -> x.1 = 'event_type', _headers).2 AS event_type,
 amount_tuple.2 AS asset, toUInt8(amount_tuple.3) AS decimals,
@@ -217,11 +218,12 @@ AND tupleElement(amount_tuple, 3) <= 18`,
 entries Array(Tuple(account_id String, direction Int32,
 amount Tuple(minor_units Int64, asset String, decimals UInt32))),
 occurred_at Tuple(seconds Int64, nanos Int32)`,
-			// Подзапрос переименовывает кортежи (алиас гасит одноименную
-			// колонку, проверено на 24.8) и выносит ARRAY JOIN; словарь
-			// dim_accounts обогащает новые строки на входе (CBL-11.3, FR-3):
-			// FINAL в правой части не дает несхлопнутым дублям размножать
-			// строки; отсутствующий счет дает пустые значения (backfill догонит).
+			// The subquery renames the tuples (the alias shadows the
+			// same-named column, verified on 24.8) and hoists the ARRAY JOIN;
+			// the dim_accounts dictionary enriches new rows on ingestion
+			// (CBL-11.3, FR-3): FINAL on the right side prevents unmerged
+			// duplicates from multiplying rows; a missing account yields
+			// empty values (backfill catches up).
 			Select: `SELECT flat.event_id, flat.transaction_id, flat.entry_index, flat.account_id,
 dim.account_type AS account_type, dim.merchant_id AS merchant_id,
 flat.asset, flat.decimals, flat.direction, flat.amount, flat.ref_type, flat.ref_id,
@@ -280,8 +282,8 @@ AND tupleElement(amount_tuple, 3) <= 18`,
 			Columns: `alert_id String, type Int32, ref_id String, severity Int32,
 expected String, actual String, merchant_id String,
 created_at Tuple(seconds Int64, nanos Int32)`,
-			// Подзапрос переименовывает тип/критичность: алиас severity
-			// перекрыл бы одноименную колонку в WHERE (проверено на 24.8).
+			// The subquery renames type/severity: the severity alias would
+			// shadow the same-named column in WHERE (verified on 24.8).
 			Select: `SELECT alert_id,
 multiIf(type_code = 1, 'missing_in_ledger', type_code = 2, 'amount_mismatch',
         type_code = 3, 'status_mismatch', '') AS alert_type,

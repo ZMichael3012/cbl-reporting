@@ -1,5 +1,5 @@
-// Пакет ledger оборачивает gRPC-клиент LedgerService для словаря счетов и
-// сверки Reporting с Ledger (CBL-11.3).
+// Package ledger wraps the LedgerService gRPC client for the account dictionary
+// and the reconciliation of Reporting with Ledger (CBL-11.3).
 package ledger
 
 import (
@@ -16,37 +16,37 @@ import (
 	commonv1 "github.com/cbl/cbl-protos/gen/go/billing/common/v1"
 )
 
-// Account описывает счет мерчанта из LedgerService.ListMerchantAccounts.
+// Account describes a merchant account from LedgerService.ListMerchantAccounts.
 type Account struct {
-	// ID задает идентификатор счета.
+	// ID sets the account identifier.
 	ID string
-	// Type задает тип счета плана (merchant или payout).
+	// Type sets the chart account type (merchant or payout).
 	Type string
-	// Asset задает код актива счета.
+	// Asset sets the account asset code.
 	Asset string
-	// Decimals задает шкалу актива счета.
+	// Decimals sets the scale of the account asset.
 	Decimals uint32
 }
 
-// Entry описывает проводку из LedgerService.ListEntries.
+// Entry describes a ledger entry from LedgerService.ListEntries.
 type Entry struct {
-	// TransactionID задает идентификатор транзакции.
+	// TransactionID sets the transaction identifier.
 	TransactionID string
-	// Direction задает направление проводки (debit или credit).
+	// Direction sets the entry direction (debit or credit).
 	Direction string
-	// AmountMinor задает сумму в минимальных единицах.
+	// AmountMinor sets the amount in minor units.
 	AmountMinor int64
 }
 
-// Client оборачивает gRPC-клиент LedgerService с общим таймаутом вызовов.
+// Client wraps the LedgerService gRPC client with a shared call timeout.
 type Client struct {
 	conn    *grpc.ClientConn
 	svc     ledgerv1.LedgerServiceClient
 	timeout time.Duration
 }
 
-// NewClient подключается к LedgerService по адресу host:port (plaintext; mTLS -
-// задача 0.6); соединение ленивое, старт сервиса от Ledger не зависит.
+// NewClient connects to LedgerService at the host:port address (plaintext; mTLS
+// is task 0.6); the connection is lazy, service startup does not depend on Ledger.
 func NewClient(addr string, timeout time.Duration) (*Client, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -55,13 +55,13 @@ func NewClient(addr string, timeout time.Duration) (*Client, error) {
 	return &Client{conn: conn, svc: ledgerv1.NewLedgerServiceClient(conn), timeout: timeout}, nil
 }
 
-// Close закрывает gRPC-соединение.
+// Close closes the gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-// ListMerchantAccounts возвращает счета мерчанта с балансами (балансы словарю
-// не нужны и не сохраняются).
+// ListMerchantAccounts returns the merchant accounts with balances (the dictionary
+// does not need balances and does not store them).
 func (c *Client) ListMerchantAccounts(ctx context.Context, merchantRef string) ([]Account, error) {
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -83,8 +83,8 @@ func (c *Client) ListMerchantAccounts(ctx context.Context, merchantRef string) (
 	return accounts, nil
 }
 
-// ListEntries возвращает страницу проводок счета за период [from, to) и
-// курсор следующей страницы (пустой - страниц больше нет).
+// ListEntries returns a page of account entries for the period [from, to) and
+// the next page cursor (empty means there are no more pages).
 func (c *Client) ListEntries(ctx context.Context, accountID string, from, to time.Time, limit uint32, cursor string) ([]Entry, string, error) {
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -113,7 +113,7 @@ func (c *Client) ListEntries(ctx context.Context, accountID string, from, to tim
 	return entries, response.GetNextCursor(), nil
 }
 
-// directionName переводит направление контракта в имя колонки фактов.
+// directionName maps the contract direction to the fact column name.
 func directionName(direction commonv1.Direction) (string, error) {
 	switch direction {
 	case commonv1.Direction_DIRECTION_DEBIT:

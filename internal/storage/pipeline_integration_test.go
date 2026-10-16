@@ -24,8 +24,8 @@ import (
 	"github.com/cbl/cbl-reporting/test/producer"
 )
 
-// startNetwork создает изолированную сеть стенда: по имени контейнера Kafka
-// доступна для ClickHouse (аналог compose-сети сервиса).
+// startNetwork creates an isolated stand network: Kafka is reachable by
+// container name for ClickHouse (akin to the service compose network).
 func startNetwork(t *testing.T) string {
 	t.Helper()
 	name := "cbl-reporting-it-" + uuid.NewString()[:8]
@@ -37,7 +37,7 @@ func startNetwork(t *testing.T) string {
 	return name
 }
 
-// freePort выбирает свободный порт хоста для внешнего листенера Kafka.
+// freePort picks a free host port for the external Kafka listener.
 func freePort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -46,15 +46,15 @@ func freePort(t *testing.T) int {
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
-// startKafka поднимает Kafka (KRaft, два листенера) в заданной сети, создает
-// топики конвейера и возвращает адреса для ClickHouse (внутренние) и для
-// продюсера теста (внешние).
+// startKafka starts Kafka (KRaft, two listeners) in the given network,
+// creates the pipeline topics and returns the addresses for ClickHouse
+// (internal) and for the test producer (external).
 func startKafka(t *testing.T, network string) (internal []string, external []string) {
 	t.Helper()
 	ctx := context.Background()
 	hostPort := freePort(t)
-	// Адрес внешнего листенера известен до старта: порт хоста фиксируется
-	// биндингом (аналог compose-стенда сервиса).
+	// The external listener address is known before the start: the host port
+	// is fixed by binding (akin to the service compose stand).
 	externalBrokers := []string{fmt.Sprintf("localhost:%d", hostPort)}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -98,13 +98,14 @@ func startKafka(t *testing.T, network string) (internal []string, external []str
 			"--create", "--topic", topic, "--partitions", "1", "--replication-factor", "1",
 		})
 		require.NoError(t, execErr)
-		require.Zero(t, exitCode, "создание топика %s", topic)
+		require.Zero(t, exitCode, "create topic %s", topic)
 	}
 	return []string{"kafka:29092"}, externalBrokers
 }
 
-// startClickHouse поднимает ClickHouse в сети стенда, копирует wire-схему и
-// конфигурацию format_schema_path, возвращает подключение сервиса.
+// startClickHouse starts ClickHouse in the stand network, copies the wire
+// schema and the format_schema_path configuration, returns the service
+// connection.
 func startClickHouse(t *testing.T, network string) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
@@ -163,7 +164,7 @@ func startClickHouse(t *testing.T, network string) *sql.DB {
 	return db
 }
 
-// scalarCount выполняет COUNT-запрос к ClickHouse.
+// scalarCount runs a COUNT query against ClickHouse.
 func scalarCount(t *testing.T, db *sql.DB, query string) int64 {
 	t.Helper()
 	var count int64
@@ -171,7 +172,7 @@ func scalarCount(t *testing.T, db *sql.DB, query string) int64 {
 	return count
 }
 
-// waitForCount ожидает появления ожидаемого числа строк (конвейер асинхронный).
+// waitForCount waits for the expected number of rows (the pipeline is asynchronous).
 func waitForCount(t *testing.T, db *sql.DB, query string, expected int64) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
@@ -182,15 +183,15 @@ func waitForCount(t *testing.T, db *sql.DB, query string, expected int64) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("конвейер не доставил строки: ожидалось %d, фактически %d (%s)", expected, actual, query)
+			t.Fatalf("the pipeline did not deliver the rows: expected %d, got %d (%s)", expected, actual, query)
 		}
 		time.Sleep(time.Second)
 	}
 }
 
-// TestIngestionPipelineIntegration проверяет полный конвейер: миграции,
-// идемпотентную реконсиляцию, доставку событий четырех топиков, значения и
-// дедупликацию, устойчивость к битому сообщению.
+// TestIngestionPipelineIntegration checks the full pipeline: migrations,
+// idempotent reconciliation, delivery of events from four topics, values
+// and deduplication, resilience to a broken message.
 func TestIngestionPipelineIntegration(t *testing.T) {
 	ctx := context.Background()
 	network := startNetwork(t)
@@ -199,13 +200,13 @@ func TestIngestionPipelineIntegration(t *testing.T) {
 
 	require.NoError(t, storage.Migrate(ctx, db, filepath.Join("..", "..", "migrations")))
 	migrationCount := scalarCount(t, db, "SELECT count() FROM reporting.goose_db_version")
-	require.GreaterOrEqual(t, migrationCount, int64(1), "goose-версии применены")
+	require.GreaterOrEqual(t, migrationCount, int64(1), "goose versions are applied")
 
 	pipeline, err := storage.NewPipeline(db, internalBrokers[0], "events.proto", nil)
 	require.NoError(t, err)
 	require.NoError(t, pipeline.Reconcile(ctx))
-	require.NoError(t, pipeline.Reconcile(ctx), "повторная реконсиляция идемпотентна")
-	require.NoError(t, storage.Ready(ctx, db), "готовность подтверждает конвейер")
+	require.NoError(t, pipeline.Reconcile(ctx), "repeated reconciliation is idempotent")
+	require.NoError(t, storage.Ready(ctx, db), "readiness confirms the pipeline")
 	assert.Equal(t, int64(4), scalarCount(t, db,
 		"SELECT count() FROM system.tables WHERE database = 'reporting' AND name LIKE 'kafka_%'"))
 	assert.Equal(t, int64(4), scalarCount(t, db,
@@ -241,12 +242,12 @@ func TestIngestionPipelineIntegration(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(`SELECT event_type, expected_amount, asset, decimals, occurred_at
 FROM reporting.fact_payment_events FINAL WHERE payment_id = '%s'`, paymentID)).
 		Scan(&eventType, &expectedAmount, &asset, &decimals, &occurredAt))
-	assert.Equal(t, "payment.completed", eventType, "тип события из заголовка конверта")
+	assert.Equal(t, "payment.completed", eventType, "event type from the envelope header")
 	assert.Equal(t, int64(100_000000), expectedAmount)
 	assert.Equal(t, "USDT", asset)
 	assert.Equal(t, uint8(6), decimals)
 	assert.Equal(t, producer.OccurredAt.UnixMilli(), occurredAt.UnixMilli(),
-		"миллисекундная точность времени из тела события")
+		"millisecond time precision from the event body")
 
 	var entryIndex uint8
 	var direction string
@@ -269,10 +270,11 @@ FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account
 	assert.Equal(t, "amount_mismatch", alertType)
 	assert.Equal(t, "warning", severity)
 
-	// Повторная доставка того же события схлопывается дедупликацией FINAL:
-	// дубль и sentinel идут в одну партицию (тот же ключ), ожидание sentinel
-	// доказывает обработку дубля без наблюдения промежуточного состояния
-	// (фоновый merge ReplacingMergeTree мог бы схлопнуть строки раньше).
+	// Redelivery of the same event collapses via FINAL deduplication: the
+	// duplicate and the sentinel go to the same partition (the same key);
+	// waiting for the sentinel proves the duplicate was processed without
+	// observing an intermediate state (the background ReplacingMergeTree
+	// merge could collapse the rows earlier).
 	duplicateSentinelID := "pay-" + uuid.NewString()
 	duplicateSentinel, err := producer.PaymentCompleted(uuid.NewString(), duplicateSentinelID, "m-1")
 	require.NoError(t, err)
@@ -283,8 +285,9 @@ FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account
 	assert.Equal(t, int64(1), scalarCount(t, db, fmt.Sprintf(
 		"SELECT count() FROM reporting.fact_payment_events FINAL WHERE payment_id = '%s'", paymentID)))
 
-	// Невалидные сообщения не попадают в факты, конвейер жив: decimals вне
-	// диапазона, пустой event_id, reserve.created без проводок, direction=0.
+	// Invalid messages do not reach the facts, the pipeline stays alive:
+	// decimals out of range, empty event_id, reserve.created without entries,
+	// direction=0.
 	badDecimalsID := "pay-" + uuid.NewString()
 	badDecimals, err := producer.PaymentCompletedDecimals(uuid.NewString(), badDecimalsID, "m-1", 300)
 	require.NoError(t, err)
@@ -318,18 +321,18 @@ FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account
 		"SELECT count() FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s'", ledgerSentinelTxID), 2)
 	assert.Equal(t, int64(0), scalarCount(t, db, fmt.Sprintf(
 		"SELECT count() FROM reporting.fact_payment_events FINAL WHERE payment_id = '%s'", badDecimalsID)),
-		"decimals вне диапазона отфильтрован")
+		"decimals out of range is filtered out")
 	assert.Equal(t, int64(0), scalarCount(t, db,
 		"SELECT count() FROM reporting.fact_payment_events FINAL WHERE event_id = ''"),
-		"пустой event_id отфильтрован")
+		"an empty event_id is filtered out")
 	assert.Equal(t, int64(0), scalarCount(t, db, fmt.Sprintf(
 		"SELECT count() FROM reporting.fact_ledger_entries FINAL WHERE event_id = '%s'", reserveEventID)),
-		"reserve.created без проводок строк не создает")
+		"reserve.created without entries creates no rows")
 	assert.Equal(t, int64(0), scalarCount(t, db, fmt.Sprintf(
 		"SELECT count() FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s'", unspecifiedTxID)),
-		"direction=0 отфильтрован")
+		"direction=0 is filtered out")
 
-	// Битое сообщение не останавливает партицию: следующее валидное доходит.
+	// A broken message does not stop the partition: the next valid one arrives.
 	broken := producer.Event{Topic: "payment.events", Key: "broken", Headers: map[string]string{
 		"event_id":   uuid.NewString(),
 		"event_type": "payment.broken",
@@ -342,35 +345,36 @@ FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account
 	waitForCount(t, db, fmt.Sprintf(
 		"SELECT count() FROM reporting.fact_payment_events FINAL WHERE payment_id = '%s'", afterBrokenID), 1)
 
-	// Смена конфигурации (сокращение списка брокеров - подстрока старого
-	// значения) обязана обнаруживаться по отпечатку и пересоздавать пару.
+	// A configuration change (shrinking the broker list - a substring of the
+	// old value) must be detected by the fingerprint and recreate the pair.
 	changed, err := storage.NewPipeline(db, "kafka:2909", "events.proto", nil)
 	require.NoError(t, err)
 	require.NoError(t, changed.Reconcile(ctx))
 	recreated := scalarCount(t, db, `SELECT count() FROM system.tables WHERE database = 'reporting'
 AND name = 'kafka_payment_events' AND position(create_table_query, '''kafka:2909''') > 0
 AND position(create_table_query, 'kafka:29092') = 0`)
-	assert.Equal(t, int64(1), recreated, "сокращение списка брокеров пересоздает таблицу")
+	assert.Equal(t, int64(1), recreated, "shrinking the broker list recreates the table")
 
-	// Частичное состояние (таблица есть, view удален) лечится при реконсиляции
-	// тем же конфигом, и до лечения отражается в готовности сервиса.
+	// A partial state (the table exists, the view is dropped) is healed at
+	// reconciliation with the same config, and before the healing it is
+	// reflected in service readiness.
 	_, err = db.ExecContext(ctx, "DROP VIEW reporting.fact_payment_events_mv")
 	require.NoError(t, err)
-	require.Error(t, storage.Ready(ctx, db), "готовность видит неполный конвейер")
-	require.NoError(t, changed.Reconcile(ctx), "конфиг актуален: ветка восстановления view")
+	require.Error(t, storage.Ready(ctx, db), "readiness sees an incomplete pipeline")
+	require.NoError(t, changed.Reconcile(ctx), "the config is current: view recovery branch")
 	assert.Equal(t, int64(1), scalarCount(t, db, `SELECT count() FROM system.tables
-WHERE database = 'reporting' AND name = 'fact_payment_events_mv'`), "view восстановлен без пересоздания таблицы")
+WHERE database = 'reporting' AND name = 'fact_payment_events_mv'`), "the view is restored without recreating the table")
 
-	// Возврат исходных брокеров снова пересоздает пару; данные фактов целы,
-	// поток продолжается.
+	// Restoring the original brokers recreates the pair again; fact data is
+	// intact, the stream continues.
 	restored, err := storage.NewPipeline(db, internalBrokers[0], "events.proto", nil)
 	require.NoError(t, err)
 	require.NoError(t, restored.Reconcile(ctx))
 	assert.Equal(t, int64(1), scalarCount(t, db, `SELECT count() FROM system.tables
 WHERE database = 'reporting' AND name = 'kafka_payment_events'
-AND position(create_table_query, '''`+internalBrokers[0]+`''') > 0`), "исходные брокеры применены")
+AND position(create_table_query, '''`+internalBrokers[0]+`''') > 0`), "the original brokers are applied")
 
-	// Данные фактов не затрагиваются пересозданием конвейера, поток продолжается.
+	// Fact data is not affected by pipeline recreation, the stream continues.
 	assert.Equal(t, int64(1), scalarCount(t, db, fmt.Sprintf(
 		"SELECT count() FROM reporting.fact_payment_events FINAL WHERE payment_id = '%s'", paymentID)))
 	afterRestoreID := "pay-" + uuid.NewString()
@@ -381,9 +385,10 @@ AND position(create_table_query, '''`+internalBrokers[0]+`''') > 0`), "исхо�
 		"SELECT count() FROM reporting.fact_payment_events FINAL WHERE payment_id = '%s'", afterRestoreID), 1)
 }
 
-// TestLedgerEnrichmentIntegration проверяет обогащение строк леджера словарем
-// dim_accounts на входе (JOIN MV): счет словаря получает account_type и
-// merchant_id, счет вне словаря остается пустым до backfill (CBL-11.3, FR-3).
+// TestLedgerEnrichmentIntegration checks the enrichment of ledger rows with
+// the dim_accounts dictionary on ingestion (MV JOIN): a dictionary account
+// gets account_type and merchant_id, an account outside the dictionary stays
+// empty until backfill (CBL-11.3, FR-3).
 func TestLedgerEnrichmentIntegration(t *testing.T) {
 	ctx := context.Background()
 	network := startNetwork(t)
@@ -391,8 +396,9 @@ func TestLedgerEnrichmentIntegration(t *testing.T) {
 	db := startClickHouse(t, network)
 	require.NoError(t, storage.Migrate(ctx, db, filepath.Join("..", "..", "migrations")))
 
-	// Словарь наполнен до старта конвейера: строка для acc-merchant
-	// (acc-clearing в плане не зарегистрирован и останется без значений).
+	// The dictionary is populated before the pipeline start: a row for
+	// acc-merchant (acc-clearing is not registered in the chart and stays
+	// without values).
 	require.NoError(t, storage.InsertDimAccounts(ctx, db, []storage.DimAccount{{
 		AccountID: "acc-merchant", AccountType: "merchant", MerchantID: "m-1", Asset: "USDT", Decimals: 6,
 	}}))
@@ -412,17 +418,18 @@ func TestLedgerEnrichmentIntegration(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(`SELECT account_type, merchant_id
 FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account_id = 'acc-merchant'`, transactionID)).
 		Scan(&accountType, &merchantID))
-	assert.Equal(t, "merchant", accountType, "счет словаря обогащает строку на входе")
+	assert.Equal(t, "merchant", accountType, "a dictionary account enriches the row on ingestion")
 	assert.Equal(t, "m-1", merchantID)
 
 	require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(`SELECT account_type, merchant_id
 FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account_id = 'acc-clearing'`, transactionID)).
 		Scan(&accountType, &merchantID))
-	assert.Empty(t, accountType, "счет вне словаря остается пустым")
+	assert.Empty(t, accountType, "an account outside the dictionary stays empty")
 	assert.Empty(t, merchantID)
 
-	// Появление словарной записи задним числом лечится backfill-мутацией
-	// (проверяется циклом словаря в integration-тестах vocabulary).
+	// A dictionary record appearing retroactively is healed by a backfill
+	// mutation (checked by the vocabulary cycle in the vocabulary
+	// integration tests).
 	require.NoError(t, storage.BackfillAccount(ctx, db, storage.DimAccount{
 		AccountID: "acc-clearing", AccountType: "clearing", MerchantID: "", Asset: "USDT", Decimals: 6,
 	}))
@@ -437,5 +444,5 @@ FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = '%s' AND account
 		}
 		time.Sleep(time.Second)
 	}
-	assert.Equal(t, 1, enriched, "мутация backfill обогатила историческую строку")
+	assert.Equal(t, 1, enriched, "the backfill mutation enriched the historical row")
 }

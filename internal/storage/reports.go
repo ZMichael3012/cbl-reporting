@@ -8,24 +8,24 @@ import (
 	"time"
 )
 
-// ReportFilter описывает параметры выборки отчета (пустые поля не ограничивают;
-// время передается в UTC и биндится драйвером).
+// ReportFilter describes report query parameters (empty fields do not
+// constrain; time is passed in UTC and bound by the driver).
 type ReportFilter struct {
-	// MerchantID задает фильтр мерчанта (пусто - все мерчанты).
+	// MerchantID defines the merchant filter (empty - all merchants).
 	MerchantID string
-	// From задает нижнюю границу периода включительно.
+	// From defines the inclusive lower period bound.
 	From *time.Time
-	// To задает верхнюю границу периода включительно.
+	// To defines the inclusive upper period bound.
 	To *time.Time
-	// Cursor задает ключи сортировки последней выданной строки.
+	// Cursor defines the sort keys of the last returned row.
 	Cursor []string
-	// Limit задает размер страницы (сервис запрашивает limit+1).
+	// Limit defines the page size (the service requests limit+1).
 	Limit int
-	// GroupBy задает измерение группировки отчета turnover.
+	// GroupBy defines the grouping dimension of the turnover report.
 	GroupBy string
 }
 
-// PaymentFactRow описывает строку отчета payments.
+// PaymentFactRow describes a row of the payments report.
 type PaymentFactRow struct {
 	PaymentID      string
 	MerchantID     string
@@ -43,7 +43,7 @@ type PaymentFactRow struct {
 	EventID        string
 }
 
-// PayoutFactRow описывает строку отчета payouts.
+// PayoutFactRow describes a row of the payouts report.
 type PayoutFactRow struct {
 	PayoutID        string
 	MerchantID      string
@@ -61,7 +61,7 @@ type PayoutFactRow struct {
 	EventID         string
 }
 
-// LedgerFactRow описывает строку отчета ledger_entries.
+// LedgerFactRow describes a row of the ledger_entries report.
 type LedgerFactRow struct {
 	TransactionID string
 	EntryIndex    uint8
@@ -79,7 +79,7 @@ type LedgerFactRow struct {
 	EventID       string
 }
 
-// TurnoverRow описывает строку агрегата отчета turnover.
+// TurnoverRow describes an aggregate row of the turnover report.
 type TurnoverRow struct {
 	Group        string
 	Asset        string
@@ -89,27 +89,27 @@ type TurnoverRow struct {
 	EntriesCount int64
 }
 
-// reportQuery накапливает фрагменты WHERE и аргументы выборки отчета
-// (параметры биндятся драйвером; пользовательский ввод не попадает в SQL).
+// reportQuery accumulates WHERE fragments and report query arguments
+// (parameters are bound by the driver; user input does not reach SQL).
 type reportQuery struct {
 	fragments []string
 	args      []any
 }
 
-// bind добавляет фрагмент условия с аргументами.
+// bind adds a condition fragment with arguments.
 func (q *reportQuery) bind(fragment string, args ...any) {
 	q.fragments = append(q.fragments, fragment)
 	q.args = append(q.args, args...)
 }
 
-// merchant добавляет фильтр мерчанта при заданном значении.
+// merchant adds the merchant filter when a value is set.
 func (q *reportQuery) merchant(merchantID string) {
 	if merchantID != "" {
 		q.bind("merchant_id = ?", merchantID)
 	}
 }
 
-// period добавляет границы периода включительно (в UTC, точность мс).
+// period adds inclusive period bounds (in UTC, millisecond precision).
 func (q *reportQuery) period(from, to *time.Time) {
 	if from != nil {
 		q.bind("occurred_at >= toDateTime64(?, 3, 'UTC')", from.UTC().Format(timeLayout))
@@ -119,7 +119,7 @@ func (q *reportQuery) period(from, to *time.Time) {
 	}
 }
 
-// where собирает секцию WHERE.
+// where builds the WHERE section.
 func (q *reportQuery) where() string {
 	if len(q.fragments) == 0 {
 		return ""
@@ -127,13 +127,13 @@ func (q *reportQuery) where() string {
 	return " WHERE " + strings.Join(q.fragments, " AND ")
 }
 
-// buildReportSQL собирает текст запроса из литералов и плейсхолдеров
-// (пользовательский ввод участвует только через bound-параметры).
+// buildReportSQL builds the query text from literals and placeholders
+// (user input participates only via bound parameters).
 func buildReportSQL(parts ...string) string {
 	return strings.Join(parts, "")
 }
 
-// QueryPayments возвращает страницу событий платежей (FINAL).
+// QueryPayments returns a page of payment events (FINAL).
 func QueryPayments(ctx context.Context, db *sql.DB, filter ReportFilter) ([]PaymentFactRow, error) {
 	query := &reportQuery{}
 	query.merchant(filter.MerchantID)
@@ -166,7 +166,7 @@ LIMIT ?`)
 	return result, rows.Err()
 }
 
-// QueryPayouts возвращает страницу событий выплат (FINAL).
+// QueryPayouts returns a page of payout events (FINAL).
 func QueryPayouts(ctx context.Context, db *sql.DB, filter ReportFilter) ([]PayoutFactRow, error) {
 	query := &reportQuery{}
 	query.merchant(filter.MerchantID)
@@ -199,8 +199,8 @@ LIMIT ?`)
 	return result, rows.Err()
 }
 
-// QueryLedgerEntries возвращает страницу проводок леджера (FINAL, обогащенных
-// словарем dim_accounts).
+// QueryLedgerEntries returns a page of ledger entries (FINAL, enriched by the
+// dim_accounts dictionary).
 func QueryLedgerEntries(ctx context.Context, db *sql.DB, filter ReportFilter) ([]LedgerFactRow, error) {
 	query := &reportQuery{}
 	query.merchant(filter.MerchantID)
@@ -233,9 +233,9 @@ LIMIT ?`)
 	return result, rows.Err()
 }
 
-// QueryTurnover возвращает агрегат оборота мерчанта: по активу (group_by
-// asset) либо по дню и активу (group_by day_asset); суммы - в минимальных
-// единицах одного актива, float не возникает.
+// QueryTurnover returns the merchant turnover aggregate: per asset (group_by
+// asset) or per day and asset (group_by day_asset); the sums are in minor
+// units of one asset, no float occurs.
 func QueryTurnover(ctx context.Context, db *sql.DB, filter ReportFilter) ([]TurnoverRow, error) {
 	query := &reportQuery{}
 	query.bind("merchant_id = ?", filter.MerchantID)

@@ -1,3 +1,3 @@
-// Пакет domain содержит доменные модели, инварианты и правила сервиса reporting,
-// не зависящие от транспорта и хранилищ.
+// Package domain contains domain models, invariants and rules of the reporting
+// service that do not depend on transport or storage.
 package domain

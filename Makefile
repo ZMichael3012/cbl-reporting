@@ -1,4 +1,4 @@
-.PHONY: build test test-integration cover e2e vet lint fmt up down
+.PHONY: build test test-integration cover vet lint fmt up down
 
 build:
 	go build ./...
@@ -6,25 +6,19 @@ build:
 test:
 	go test ./...
 
-# test-integration гоняет integration-тесты (testcontainers: Kafka, ClickHouse).
+# test-integration runs integration tests (testcontainers: Kafka, ClickHouse).
 test-integration:
 	go test -tags integration -count=1 ./internal/...
 
-# cover считает объединенное покрытие unit+integration по internal-пакетам
-# (generated-код, main и миграции не входят; порог CBL-001 - 80%);
-# профиль cover.out не коммитится (.gitignore).
+# cover computes the combined unit+integration coverage over internal packages
+# (generated code, main and migrations are excluded; the CBL-001 threshold is 80%);
+# the cover.out profile is not committed (.gitignore).
 cover:
 	go test -tags integration -count=1 -coverpkg=./internal/... -coverprofile=cover.out ./internal/...
 	go tool cover -func=cover.out
 
-# e2e поднимает compose-стенд сервиса (Kafka + ClickHouse + ledger-stub),
-# применяет миграции и реконсиляцию через сервис и прогоняет сценарии:
-# конвейер событий до fact_* (11.2), словарь/backfill/сверка (11.3) и
-# gRPC-отчеты Query (11.4).
-e2e:
-	powershell -NoProfile -File test/e2e/ingestion.ps1
-	powershell -NoProfile -File test/e2e/vocabulary.ps1
-	powershell -NoProfile -File test/e2e/reports.ps1
+# E2E: the run is performed by an agent per test/e2e/E2E.md (platform-independent,
+# artifacts in test/e2e/.runs/<UTC mark>/); there are no PowerShell run scripts.
 
 vet:
 	go vet ./...

@@ -1,6 +1,6 @@
-// main запускает сервис reporting платформы CBL: миграции ClickHouse,
-// реконсиляция Kafka-конвейера, словарь dim_accounts, сверка с Ledger и
-// административные эндпоинты.
+// main starts the CBL platform reporting service: ClickHouse migrations,
+// Kafka pipeline reconciliation, the dim_accounts dictionary, reconciliation
+// with Ledger and administrative endpoints.
 package main
 
 import (
@@ -36,7 +36,7 @@ import (
 	"github.com/cbl/cbl-reporting/internal/vocabulary"
 )
 
-// main запускает сервис и завершает процесс ненулевым кодом при ошибке.
+// main starts the service and exits the process with a non-zero code on error.
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
@@ -44,8 +44,8 @@ func main() {
 	}
 }
 
-// run собирает зависимости конвейера, словаря и сверки и обслуживает запросы
-// до сигнала остановки.
+// run assembles the pipeline, dictionary and reconciliation dependencies and
+// serves requests until a stop signal.
 func run() error {
 	log, err := zap.NewProduction()
 	if err != nil {
@@ -143,7 +143,7 @@ func run() error {
 		IdleTimeout:       60 * time.Second,
 	}
 	metricsSrv := &http.Server{Addr: cfg.MetricsAddr, Handler: counters.Handler(), ReadHeaderTimeout: 5 * time.Second}
-	// Интерцептор kit: trace/request-id и восстановление после паник Query.
+	// kit interceptor: trace/request-id and panic recovery of Query.
 	grpcSrv := grpc.NewServer(grpc.UnaryInterceptor(grpcmw.UnaryServer(log)))
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
 	reportingv1.RegisterReportingServiceServer(grpcSrv, transport.NewReportsServer(reportsService, log))
@@ -193,8 +193,8 @@ func run() error {
 		}
 	}
 	log.Info("shutdown started")
-	// Остановка воркеров раньше серверов: циклы не начинают новую работу на
-	// закрывающемся соединении ClickHouse.
+	// Workers stop before servers: cycles do not start new work on a
+	// closing ClickHouse connection.
 	stop()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

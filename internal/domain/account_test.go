@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// TestDeriveAccountIDGoldenVectors проверяет воспроизведение всех golden-векторов
-// плана счетов CBL-003, раздел 9: дрейф деривации между сервисами недопустим
-// (KI-ledger-08).
+// TestDeriveAccountIDGoldenVectors verifies reproduction of all chart-of-accounts
+// golden vectors from CBL-003, section 9: derivation drift between services is
+// unacceptable (KI-ledger-08).
 func TestDeriveAccountIDGoldenVectors(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -40,7 +40,7 @@ func TestDeriveAccountIDGoldenVectors(t *testing.T) {
 	}
 }
 
-// TestDeriveAccountIDDeterministic проверяет повторяемость вывода.
+// TestDeriveAccountIDDeterministic verifies that derivation is repeatable.
 func TestDeriveAccountIDDeterministic(t *testing.T) {
 	first, err := DeriveAccountID("clearing", "USDT", 6, "")
 	if err != nil {
@@ -55,7 +55,7 @@ func TestDeriveAccountIDDeterministic(t *testing.T) {
 	}
 }
 
-// TestDeriveAccountIDInvalid проверяет отказ на ключах вне правил плана счетов.
+// TestDeriveAccountIDInvalid verifies rejection of keys outside the chart-of-accounts rules.
 func TestDeriveAccountIDInvalid(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -83,7 +83,7 @@ func TestDeriveAccountIDInvalid(t *testing.T) {
 	}
 }
 
-// TestValidAccountID проверяет форму идентификатора счета из Ledger.
+// TestValidAccountID verifies the form of the account identifier from Ledger.
 func TestValidAccountID(t *testing.T) {
 	valid := []string{
 		"58686062-c133-5d4e-b08b-0d33a0db924f",
@@ -104,7 +104,7 @@ func TestValidAccountID(t *testing.T) {
 	}
 }
 
-// TestValidAccountType проверяет замкнутое множество типов плана счетов.
+// TestValidAccountType verifies the closed set of chart-of-accounts types.
 func TestValidAccountType(t *testing.T) {
 	for _, accountType := range append([]string{"merchant", "payout"}, PlatformAccountTypes...) {
 		if !ValidAccountType(accountType) {
@@ -118,7 +118,7 @@ func TestValidAccountType(t *testing.T) {
 	}
 }
 
-// TestValidMerchantRef проверяет границы бизнес-ссылки мерчанта.
+// TestValidMerchantRef verifies the bounds of the merchant business reference.
 func TestValidMerchantRef(t *testing.T) {
 	valid := []string{"m-1", "M-1_a", "m", "0", "a1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678"}
 	for _, ref := range valid {
@@ -126,7 +126,7 @@ func TestValidMerchantRef(t *testing.T) {
 			t.Errorf("ValidMerchantRef(%q) = false, want true", ref)
 		}
 	}
-	invalid := []string{"", "m:1", "m 1", "m/1", "а"}
+	invalid := []string{"", "m:1", "m 1", "m/1", "\u0430"}
 	for _, ref := range invalid {
 		if ValidMerchantRef(ref) {
 			t.Errorf("ValidMerchantRef(%q) = true, want false", ref)

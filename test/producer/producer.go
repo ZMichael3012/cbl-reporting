@@ -1,6 +1,6 @@
-// Пакет producer публикует тестовые события CBL в Kafka: используется
-// интеграционными тестами и e2e сервиса reporting (в продуктовом коде нет
-// собственного Kafka-клиента - потребление идет через ClickHouse Kafka engine).
+// Package producer publishes test CBL events to Kafka: it is used by
+// integration tests and the reporting service e2e (production code has no
+// own Kafka client - consumption goes through the ClickHouse Kafka engine).
 package producer
 
 import (
@@ -16,23 +16,23 @@ import (
 	eventsv1 "github.com/cbl/cbl-protos/gen/go/billing/events/v1"
 )
 
-// Event описывает сообщение конверта CBL для публикации.
+// Event describes a CBL envelope message to publish.
 type Event struct {
-	// Topic задает топик Kafka.
+	// Topic sets the Kafka topic.
 	Topic string
-	// Key задает ключ партиции.
+	// Key sets the partition key.
 	Key string
-	// Headers задает заголовки конверта (event_id, event_type, occurred_at).
+	// Headers sets the envelope headers (event_id, event_type, occurred_at).
 	Headers map[string]string
-	// Payload задает сериализованное protobuf-тело события.
+	// Payload sets the serialized protobuf event body.
 	Payload []byte
 }
 
-// OccurredAt задает общее время тестовых событий (фиксировано для проверок;
-// ненулевые наносекунды проверяют миллисекундную точность конверсии).
+// OccurredAt sets the common time of test events (fixed for assertions;
+// non-zero nanoseconds verify the millisecond conversion precision).
 var OccurredAt = time.Date(2026, 10, 15, 10, 0, 0, 123456789, time.UTC)
 
-// NewEvent собирает конверт события с обязательными заголовками.
+// NewEvent builds an event envelope with the mandatory headers.
 func NewEvent(topic, eventType, eventID, key string, occurredAt time.Time, payload []byte) Event {
 	return Event{
 		Topic: topic,
@@ -46,13 +46,13 @@ func NewEvent(topic, eventType, eventID, key string, occurredAt time.Time, paylo
 	}
 }
 
-// PaymentCompleted собирает событие payment.completed.
+// PaymentCompleted builds a payment.completed event.
 func PaymentCompleted(eventID, paymentID, merchantID string) (Event, error) {
 	return PaymentCompletedDecimals(eventID, paymentID, merchantID, 6)
 }
 
-// PaymentCompletedDecimals собирает событие payment.completed с заданным
-// decimals (проверки фильтра недопустимых значений MV).
+// PaymentCompletedDecimals builds a payment.completed event with the given
+// decimals (checks of the materialized view invalid value filter).
 func PaymentCompletedDecimals(eventID, paymentID, merchantID string, decimals uint32) (Event, error) {
 	event := &eventsv1.PaymentEvent{
 		PaymentId:      paymentID,
@@ -70,7 +70,7 @@ func PaymentCompletedDecimals(eventID, paymentID, merchantID string, decimals ui
 	return marshal("payment.events", "payment.completed", eventID, paymentID, event)
 }
 
-// LedgerPosted собирает событие transaction.posted с двумя проводками.
+// LedgerPosted builds a transaction.posted event with two entries.
 func LedgerPosted(eventID, transactionID, refID string) (Event, error) {
 	event := &eventsv1.LedgerEvent{
 		TransactionId: transactionID,
@@ -94,7 +94,7 @@ func LedgerPosted(eventID, transactionID, refID string) (Event, error) {
 	return marshal("ledger.events", "transaction.posted", eventID, "acc-clearing", event)
 }
 
-// PayoutRequested собирает событие payout.requested.
+// PayoutRequested builds a payout.requested event.
 func PayoutRequested(eventID, payoutID, merchantID string) (Event, error) {
 	event := &eventsv1.PayoutEvent{
 		PayoutId:     payoutID,
@@ -109,7 +109,7 @@ func PayoutRequested(eventID, payoutID, merchantID string) (Event, error) {
 	return marshal("payout.events", "payout.requested", eventID, payoutID, event)
 }
 
-// ReconAmountMismatch собирает расхождение amount_mismatch.
+// ReconAmountMismatch builds an amount_mismatch alert.
 func ReconAmountMismatch(eventID, refID, merchantID string) (Event, error) {
 	event := &eventsv1.ReconAlert{
 		AlertId:    eventID,
@@ -124,8 +124,8 @@ func ReconAmountMismatch(eventID, refID, merchantID string) (Event, error) {
 	return marshal("recon.alerts", "recon.alert", eventID, refID, event)
 }
 
-// ReserveCreated собирает событие reserve.created без проводок и без
-// transaction_id (не создает строк фактов; проверки фильтров MV).
+// ReserveCreated builds a reserve.created event without entries and without
+// transaction_id (creates no fact rows; checks of the materialized view filters).
 func ReserveCreated(eventID, refID string) (Event, error) {
 	event := &eventsv1.LedgerEvent{
 		Type:       eventsv1.LedgerEventType_LEDGER_EVENT_TYPE_RESERVE_CREATED,
@@ -136,8 +136,8 @@ func ReserveCreated(eventID, refID string) (Event, error) {
 	return marshal("ledger.events", "reserve.created", eventID, refID, event)
 }
 
-// LedgerUnspecifiedDirection собирает transaction.posted с проводкой
-// direction UNSPECIFIED (не попадает в Enum8, строки нет).
+// LedgerUnspecifiedDirection builds a transaction.posted with an entry of
+// direction UNSPECIFIED (does not map to Enum8, so no row appears).
 func LedgerUnspecifiedDirection(eventID, transactionID, refID string) (Event, error) {
 	event := &eventsv1.LedgerEvent{
 		TransactionId: transactionID,
@@ -154,7 +154,7 @@ func LedgerUnspecifiedDirection(eventID, transactionID, refID string) (Event, er
 	return marshal("ledger.events", "transaction.posted", eventID, refID, event)
 }
 
-// marshal сериализует тело события и оборачивает его конвертом.
+// marshal serializes the event body and wraps it in an envelope.
 func marshal(topic, eventType, eventID, key string, message proto.Message) (Event, error) {
 	payload, err := proto.Marshal(message)
 	if err != nil {
@@ -163,7 +163,7 @@ func marshal(topic, eventType, eventID, key string, message proto.Message) (Even
 	return NewEvent(topic, eventType, eventID, key, OccurredAt, payload), nil
 }
 
-// Publish публикует события синхронно (acks=all) и проверяет доставку.
+// Publish publishes events synchronously (acks=all) and verifies delivery.
 func Publish(ctx context.Context, brokers []string, events []Event) error {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),

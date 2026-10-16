@@ -51,13 +51,13 @@ services:
       CLICKHOUSE_PASSWORD: cbl
       CLICKHOUSE_DB: reporting
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
-      # Каталог форматов монтируется read-only; entrypoint пропускает chown
-      # (volume остается записываемым для серверного процесса).
+      # The formats directory is mounted read-only; the entrypoint skips chown
+      # (the volume stays writable for the server process).
       CLICKHOUSE_DO_NOT_CHOWN: "1"
     volumes:
       - ch-data:/var/lib/clickhouse
-      # Wire-схема конвейера читается сервером ClickHouse из format_schema_path
-      # (Kafka engine запрещает абсолютный путь в format_schema).
+      # The pipeline wire schema is read by the ClickHouse server from format_schema_path
+      # (the Kafka engine forbids an absolute path in format_schema).
       - ./format_schemas:/schemas:ro
       - ./clickhouse-config/10-format-schema-path.xml:/etc/clickhouse-server/config.d/10-format-schema-path.xml:ro
     ports: ["8123:8123", "9000:9000"]
@@ -67,20 +67,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
-  # ledger-stub - тестовый Ledger для словаря dim_accounts и сверки (e2e);
-  # в продуктовый контур не входит. Административный HTTP публикуется для
-  # сида проводок из e2e-скрипта, gRPC доступен только внутри сети.
+  # ledger-stub - a test Ledger for the dim_accounts vocabulary and check (e2e);
+  # not part of the production contour. The admin HTTP is published for
+  # entry seeding from the e2e script, gRPC is available only inside the network.
   ledger-stub:
     build:
       context: ../..
-      dockerfile: cbl-reporting/test/e2e/ledgerstub/Dockerfile
+      dockerfile: cbl-reporting/test/e2e/.additionals/ledgerstub/Dockerfile
     environment:
       STUB_GRPC_ADDR: ":9040"
       STUB_HTTP_ADDR: ":9041"
       STUB_MERCHANT_REF: "m-1"
-    # gRPC стаба слушает loopback (локальный запуск бинарника сервиса),
-    # админ-сид - тоже loopback: в сеть стенда ничего не публикуется сверх
-    # внутренних адресов (тестовый контур, не продукт).
+    # The stub gRPC listens on loopback (local run of the service binary),
+    # the admin seed as well: nothing is published to the stand network beyond
+    # the internal addresses (test contour, not production).
     ports: ["127.0.0.1:9040:9040", "127.0.0.1:9041:9041"]
     networks: [cbl-net]
   reporting:
@@ -96,16 +96,16 @@ services:
       KAFKA_BROKERS: kafka:29092
       SCHEMA_PATH: events.proto
       MIGRATIONS_DIR: /app/migrations
-      # Словарь и сверка на стенде: ускоренные интервалы и короткое окно,
-      # чтобы e2e укладывался в минуты (в продукт не переносятся).
+      # Vocabulary and check on the stand: accelerated intervals and a short window
+      # so the e2e fits in minutes (not carried over to production).
       LEDGER_GRPC_ADDR: ledger-stub:9040
       DIM_REFRESH_INTERVAL: 5s
       LEDGER_CHECK_INTERVAL: 5s
       LEDGER_CHECK_WINDOW: 15s
     ports:
       - "8110:8110"
-      # gRPC (Query) в dev публикуется только на loopback: без authN (mTLS - 0.6)
-      # порт не должен быть доступен сети (KI-reporting-13).
+      # gRPC (Query) in dev is published only on loopback: without authN (mTLS - 0.6)
+      # the port must not be reachable from the network (KI-reporting-13).
       - "127.0.0.1:9110:9110"
       - "9310:9310"
     depends_on:

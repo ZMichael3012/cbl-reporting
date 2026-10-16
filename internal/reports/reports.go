@@ -1,5 +1,5 @@
-// Пакет reports реализует каталог отчетов ReportingService: валидацию,
-// keyset-пагинацию, выборки из ClickHouse и форматирование значений (CBL-11.4).
+// Package reports implements the ReportingService report catalog: validation,
+// keyset pagination, ClickHouse queries and value formatting (CBL-11.4).
 package reports
 
 import (
@@ -17,15 +17,15 @@ import (
 	"github.com/cbl/cbl-reporting/internal/storage"
 )
 
-// Доменные ошибки сервиса (транспорт переводит их в коды gRPC).
+// Domain errors of the service (the transport maps them to gRPC codes).
 var (
-	// ErrUnknownReport означает тип отчета вне закрытого каталога.
+	// ErrUnknownReport means a report type outside the closed catalog.
 	ErrUnknownReport = errors.New("unknown report type")
-	// ErrInvalidArgument означает недопустимые параметры запроса.
+	// ErrInvalidArgument means invalid request parameters.
 	ErrInvalidArgument = errors.New("invalid argument")
 )
 
-// Ограничения контракта (billing/reporting/v1) и транспорта.
+// Contract (billing/reporting/v1) and transport limits.
 const (
 	defaultLimit    = 20
 	maxLimit        = 100
@@ -33,29 +33,29 @@ const (
 	cursorVersion   = 1
 )
 
-// cursorTimeLayout задает формат времени в ключах курсора (точность колонок
-// DateTime64(3)).
+// cursorTimeLayout defines the time format in cursor keys (precision of the
+// DateTime64(3) columns).
 const cursorTimeLayout = "2006-01-02 15:04:05.000"
 
-// cursorDayLayout задает формат дня в ключах курсора группировки day_asset.
+// cursorDayLayout defines the day format in cursor keys of the day_asset grouping.
 const cursorDayLayout = "2006-01-02"
 
-// cursorKeyKind задает проверяемый формат ключа курсора.
+// cursorKeyKind defines the validated form of a cursor key.
 type cursorKeyKind int
 
 const (
-	// keyTime задает время в формате курсора фактов.
+	// keyTime defines time in the fact cursor format.
 	keyTime cursorKeyKind = iota
-	// keyDay задает день в формате 2006-01-02.
+	// keyDay defines a day in the 2006-01-02 format.
 	keyDay
-	// keyIndex задает индекс проводки (UInt8).
+	// keyIndex defines the entry index (UInt8).
 	keyIndex
-	// keyText задает строковый ключ (идентификатор, актив).
+	// keyText defines a string key (identifier, asset).
 	keyText
 )
 
-// reportDef описывает запись каталога: группировку, требование мерчанта и
-// форматы ключей курсора по вариантам group_by ("" - тип без группировки).
+// reportDef describes a catalog entry: the grouping, the merchant requirement
+// and cursor key formats per group_by variant ("" - a type without grouping).
 type reportDef struct {
 	groupBy          []string
 	defaultGroupBy   string
@@ -63,7 +63,7 @@ type reportDef struct {
 	cursorKeys       map[string][]cursorKeyKind
 }
 
-// catalog задает закрытый каталог отчетов 11.4.
+// catalog defines the closed report catalog of 11.4.
 var catalog = map[string]reportDef{
 	"payments":       {cursorKeys: map[string][]cursorKeyKind{"": {keyTime, keyText, keyText}}},
 	"payouts":        {cursorKeys: map[string][]cursorKeyKind{"": {keyTime, keyText, keyText}}},
@@ -79,7 +79,7 @@ var catalog = map[string]reportDef{
 	},
 }
 
-// Reports возвращает типы каталога по алфавиту (документация и диагностика).
+// Reports returns the catalog types in alphabetical order (documentation and diagnostics).
 func Reports() []string {
 	names := make([]string, 0, len(catalog))
 	for name := range catalog {
@@ -89,39 +89,39 @@ func Reports() []string {
 	return names
 }
 
-// QueryRequest описывает параметры отчета; период приводится к миллисекундам
-// (точность DateTime64(3)).
+// QueryRequest describes report parameters; the period is aligned to
+// milliseconds (DateTime64(3) precision).
 type QueryRequest struct {
-	// ReportType задает тип отчета из каталога.
+	// ReportType defines the report type from the catalog.
 	ReportType string
-	// MerchantID задает мерчанта (пусто - все мерчанты для списков).
+	// MerchantID defines the merchant (empty - all merchants for list reports).
 	MerchantID string
-	// PeriodFrom задает нижнюю границу периода включительно.
+	// PeriodFrom defines the inclusive lower period bound.
 	PeriodFrom *time.Time
-	// PeriodTo задает верхнюю границу периода включительно.
+	// PeriodTo defines the inclusive upper period bound.
 	PeriodTo *time.Time
-	// GroupBy задает измерение группировки (turnover).
+	// GroupBy defines the grouping dimension (turnover).
 	GroupBy string
-	// Limit задает размер страницы (0 - дефолт 20, максимум 100).
+	// Limit defines the page size (0 - default 20, maximum 100).
 	Limit uint32
-	// Cursor задает непрозрачный курсор продолжения.
+	// Cursor defines the opaque continuation cursor.
 	Cursor string
 }
 
-// Page описывает страницу отчета.
+// Page describes a report page.
 type Page struct {
-	// Rows задает строки страницы (значения - строки).
+	// Rows defines the page rows (values are strings).
 	Rows []map[string]string
-	// NextCursor задает курсор следующей страницы (пусто - конец).
+	// NextCursor defines the next page cursor (empty - the end).
 	NextCursor string
 }
 
-// Service выполняет запросы отчетов по каталогу.
+// Service executes report queries over the catalog.
 type Service struct {
 	db *sql.DB
 }
 
-// New собирает сервис отчетов.
+// New assembles the reports service.
 func New(db *sql.DB) (*Service, error) {
 	if db == nil {
 		return nil, errors.New("clickhouse db is required")
@@ -129,7 +129,7 @@ func New(db *sql.DB) (*Service, error) {
 	return &Service{db: db}, nil
 }
 
-// Query проверяет параметры, выполняет выборку и возвращает страницу отчета.
+// Query validates parameters, executes the query and returns a report page.
 func (s *Service) Query(ctx context.Context, request QueryRequest) (Page, error) {
 	def, ok := catalog[request.ReportType]
 	if !ok {
@@ -172,7 +172,7 @@ func (s *Service) Query(ctx context.Context, request QueryRequest) (Page, error)
 	}
 }
 
-// validate проверяет параметры запроса против записи каталога.
+// validate checks request parameters against a catalog entry.
 func validate(request QueryRequest, def reportDef) error {
 	if request.Limit > maxLimit {
 		return fmt.Errorf("%w: limit %d exceeds %d", ErrInvalidArgument, request.Limit, maxLimit)
@@ -189,7 +189,7 @@ func validate(request QueryRequest, def reportDef) error {
 	return nil
 }
 
-// resolveGroupBy проверяет группировку через whitelist каталога.
+// resolveGroupBy validates the grouping via the catalog whitelist.
 func resolveGroupBy(groupBy string, def reportDef) (string, error) {
 	if def.groupBy == nil {
 		if groupBy != "" {
@@ -208,7 +208,7 @@ func resolveGroupBy(groupBy string, def reportDef) (string, error) {
 	return "", fmt.Errorf("%w: group_by %q is not supported", ErrInvalidArgument, groupBy)
 }
 
-// truncateMilli приводит границу периода к точности колонок DateTime64(3).
+// truncateMilli aligns a period bound to the DateTime64(3) column precision.
 func truncateMilli(value *time.Time) *time.Time {
 	if value == nil {
 		return nil
@@ -217,14 +217,14 @@ func truncateMilli(value *time.Time) *time.Time {
 	return &truncated
 }
 
-// cursorPayload описывает непрозрачный курсор (keyset по ключам сортировки).
+// cursorPayload describes the opaque cursor (keyset over sort keys).
 type cursorPayload struct {
 	Version int      `json:"v"`
 	Report  string   `json:"report"`
 	Keys    []string `json:"keys"`
 }
 
-// encodeCursor собирает курсор по ключам сортировки последней выданной строки.
+// encodeCursor builds a cursor from the sort keys of the last returned row.
 func encodeCursor(report string, keys []string) (string, error) {
 	payload, err := json.Marshal(cursorPayload{Version: cursorVersion, Report: report, Keys: keys})
 	if err != nil {
@@ -233,8 +233,8 @@ func encodeCursor(report string, keys []string) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
-// decodeCursor разбирает и валидирует курсор: структуру (версия, отчет, число
-// ключей) и формат каждого ключа (время, день, индекс, строковый идентификатор).
+// decodeCursor parses and validates a cursor: the structure (version, report,
+// number of keys) and the format of each key (time, day, index, string ID).
 func decodeCursor(raw, report string, kinds []cursorKeyKind) ([]string, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
@@ -255,8 +255,8 @@ func decodeCursor(raw, report string, kinds []cursorKeyKind) ([]string, error) {
 	return payload.Keys, nil
 }
 
-// validateCursorKey проверяет формат одного ключа курсора: структурно
-// корректный, но испорченный курсор не должен доходить до ClickHouse.
+// validateCursorKey checks the format of a single cursor key: a structurally
+// valid but corrupted cursor must not reach ClickHouse.
 func validateCursorKey(kind cursorKeyKind, value string) error {
 	switch kind {
 	case keyTime:
@@ -279,8 +279,8 @@ func validateCursorKey(kind cursorKeyKind, value string) error {
 	return nil
 }
 
-// FormatMinor конвертирует сумму в минимальных единицах в каноническую
-// десятичную строку ^-?(0|[1-9][0-9]*)(\.[0-9]+)?$ (float запрещен).
+// FormatMinor converts an amount in minor units into the canonical decimal
+// string ^-?(0|[1-9][0-9]*)(\.[0-9]+)?$ (float is forbidden).
 func FormatMinor(minor int64, decimals uint8) string {
 	digits := strconv.FormatInt(minor, 10)
 	negative := strings.HasPrefix(digits, "-")
@@ -301,12 +301,12 @@ func FormatMinor(minor int64, decimals uint8) string {
 	return digits
 }
 
-// formatTime переводит время в RFC 3339 UTC с миллисекундами.
+// formatTime converts time to RFC 3339 UTC with milliseconds.
 func formatTime(value time.Time) string {
 	return value.UTC().Format("2006-01-02T15:04:05.000Z07:00")
 }
 
-// queryPayments отдает страницу отчета payments.
+// queryPayments returns a page of the payments report.
 func (s *Service) queryPayments(ctx context.Context, filter storage.ReportFilter, limit int) (Page, error) {
 	rows, err := storage.QueryPayments(ctx, s.db, filter)
 	if err != nil {
@@ -333,8 +333,8 @@ func (s *Service) queryPayments(ctx context.Context, filter storage.ReportFilter
 		})
 	}
 	if len(rows) > limit {
-		// Курсор - ключи последней выданной строки (следующая страница строго
-		// после нее); лишняя строка лишь сигнализирует о продолжении.
+		// The cursor is the sort keys of the last returned row (the next page
+		// starts strictly after it); the extra row only signals continuation.
 		last := rows[limit-1]
 		if page.NextCursor, err = encodeCursor("payments", []string{
 			last.OccurredAt.UTC().Format(cursorTimeLayout), last.PaymentID, last.EventID,
@@ -345,7 +345,7 @@ func (s *Service) queryPayments(ctx context.Context, filter storage.ReportFilter
 	return page, nil
 }
 
-// queryPayouts отдает страницу отчета payouts.
+// queryPayouts returns a page of the payouts report.
 func (s *Service) queryPayouts(ctx context.Context, filter storage.ReportFilter, limit int) (Page, error) {
 	rows, err := storage.QueryPayouts(ctx, s.db, filter)
 	if err != nil {
@@ -382,7 +382,7 @@ func (s *Service) queryPayouts(ctx context.Context, filter storage.ReportFilter,
 	return page, nil
 }
 
-// queryLedgerEntries отдает страницу отчета ledger_entries.
+// queryLedgerEntries returns a page of the ledger_entries report.
 func (s *Service) queryLedgerEntries(ctx context.Context, filter storage.ReportFilter, limit int) (Page, error) {
 	rows, err := storage.QueryLedgerEntries(ctx, s.db, filter)
 	if err != nil {
@@ -420,7 +420,7 @@ func (s *Service) queryLedgerEntries(ctx context.Context, filter storage.ReportF
 	return page, nil
 }
 
-// queryTurnover отдает страницу агрегата оборота мерчанта.
+// queryTurnover returns a page of the merchant turnover aggregate.
 func (s *Service) queryTurnover(ctx context.Context, filter storage.ReportFilter, limit int, groupBy string) (Page, error) {
 	rows, err := storage.QueryTurnover(ctx, s.db, filter)
 	if err != nil {

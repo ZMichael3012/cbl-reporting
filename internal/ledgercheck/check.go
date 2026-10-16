@@ -1,6 +1,6 @@
-// Пакет ledgercheck периодически сверяет факты Reporting с Ledger по счетам
-// словаря dim_accounts: контроль достоверности конвейера, без денежных решений
-// и без публикации recon.alerts (зона Reconciler, T-09).
+// Package ledgercheck periodically reconciles Reporting facts with Ledger over the
+// dim_accounts dictionary accounts: pipeline trustworthiness control, without money
+// decisions and without publishing recon.alerts (Reconciler domain, T-09).
 package ledgercheck
 
 import (
@@ -18,35 +18,35 @@ import (
 	"github.com/cbl/cbl-reporting/internal/storage"
 )
 
-// Классы расхождений сверки.
+// Reconciliation discrepancy classes.
 const (
-	// KindMissingInReporting означает проводку Ledger, отсутствующую в фактах.
+	// KindMissingInReporting means a Ledger entry missing from the facts.
 	KindMissingInReporting = "missing_in_reporting"
-	// KindExtraInReporting означает строку фактов, отсутствующую в Ledger.
+	// KindExtraInReporting means a fact row missing from Ledger.
 	KindExtraInReporting = "extra_in_reporting"
-	// KindAmountMismatch означает расхождение числа проводок или сумм.
+	// KindAmountMismatch means a discrepancy in the number of entries or in amounts.
 	KindAmountMismatch = "amount_mismatch"
 )
 
-// Ledger описывает чтение выписки счета (реализуется internal/ledger).
+// Ledger describes reading an account statement (implemented by internal/ledger).
 type Ledger interface {
 	ListEntries(ctx context.Context, accountID string, from, to time.Time, limit uint32, cursor string) ([]ledger.Entry, string, error)
 }
 
-// Discrepancy описывает одно расхождение сверки.
+// Discrepancy describes a single reconciliation discrepancy.
 type Discrepancy struct {
-	// Kind задает класс расхождения.
+	// Kind sets the discrepancy class.
 	Kind string
-	// TransactionID задает транзакцию расхождения.
+	// TransactionID sets the transaction of the discrepancy.
 	TransactionID string
-	// Ledger задает агрегат стороны Ledger.
+	// Ledger sets the Ledger-side aggregate.
 	Ledger storage.TxAggregate
-	// Fact задает агрегат стороны фактов.
+	// Fact sets the fact-side aggregate.
 	Fact storage.TxAggregate
 }
 
-// Aggregate переводит проводки Ledger в агрегаты по транзакциям; неизвестное
-// направление - ошибка (данные вне контракта не искажают суммы молча).
+// Aggregate converts Ledger entries into per-transaction aggregates; an unknown
+// direction is an error (out-of-contract data does not silently distort amounts).
 func Aggregate(entries []ledger.Entry) (map[string]storage.TxAggregate, error) {
 	aggregates := make(map[string]storage.TxAggregate)
 	for _, entry := range entries {
@@ -65,8 +65,8 @@ func Aggregate(entries []ledger.Entry) (map[string]storage.TxAggregate, error) {
 	return aggregates, nil
 }
 
-// mergeAggregates ассоциативно вливает агрегат страницы в общий (память
-// ограничена числом транзакций окна, а не числом страниц).
+// mergeAggregates associatively merges a page aggregate into the common one (memory
+// is bounded by the number of transactions in the window, not by the number of pages).
 func mergeAggregates(destination, source map[string]storage.TxAggregate) {
 	for transactionID, aggregate := range source {
 		current := destination[transactionID]
@@ -77,8 +77,8 @@ func mergeAggregates(destination, source map[string]storage.TxAggregate) {
 	}
 }
 
-// Compare сопоставляет агрегаты Ledger и фактов; порядок расхождений
-// детерминирован (класс, транзакция) для стабильных логов и тестов.
+// Compare matches Ledger and fact aggregates; the discrepancy order is
+// deterministic (class, transaction) for stable logs and tests.
 func Compare(ledgerAgg, factAgg map[string]storage.TxAggregate) []Discrepancy {
 	var discrepancies []Discrepancy
 	for transactionID, ledgerValue := range ledgerAgg {
@@ -110,25 +110,25 @@ func Compare(ledgerAgg, factAgg map[string]storage.TxAggregate) []Discrepancy {
 	return discrepancies
 }
 
-// Summary описывает итог одного цикла сверки.
+// Summary describes the outcome of one reconciliation cycle.
 type Summary struct {
-	// Accounts задает число выбранных счетов.
+	// Accounts sets the number of selected accounts.
 	Accounts int
-	// Checked задает число успешно сверенных счетов.
+	// Checked sets the number of successfully reconciled accounts.
 	Checked int
-	// Missing задает число расхождений missing_in_reporting.
+	// Missing sets the number of missing_in_reporting discrepancies.
 	Missing int
-	// Extra задает число расхождений extra_in_reporting.
+	// Extra sets the number of extra_in_reporting discrepancies.
 	Extra int
-	// Mismatch задает число расхождений amount_mismatch.
+	// Mismatch sets the number of amount_mismatch discrepancies.
 	Mismatch int
-	// Truncated задает число пропущенных счетов с превышением страниц.
+	// Truncated sets the number of skipped accounts that exceeded the page limit.
 	Truncated int
-	// Errors задает число счетов с ошибкой сверки.
+	// Errors sets the number of accounts with a reconciliation error.
 	Errors int
 }
 
-// Checker сверяет факты с Ledger по счетам словаря.
+// Checker reconciles facts with Ledger over the dictionary accounts.
 type Checker struct {
 	db        *sql.DB
 	ledger    Ledger
@@ -142,7 +142,7 @@ type Checker struct {
 	cursor    string
 }
 
-// New собирает сверку; nil-логгер заменяется пустым.
+// New assembles the reconciler; a nil logger is replaced with a no-op one.
 func New(db *sql.DB, ledgerClient Ledger, interval, window time.Duration, accounts int, pageLimit uint32, maxPages int, log *zap.Logger, counters *metrics.Counters) (*Checker, error) {
 	if db == nil || ledgerClient == nil {
 		return nil, errors.New("db and ledger client are required")
@@ -169,8 +169,8 @@ func New(db *sql.DB, ledgerClient Ledger, interval, window time.Duration, accoun
 	}, nil
 }
 
-// Run выполняет цикл сразу и затем по интервалу до отмены контекста; ошибки
-// цикла логируются и не завершают воркер.
+// Run executes a cycle immediately and then on the interval until the context is
+// canceled; cycle errors are logged and do not terminate the worker.
 func (c *Checker) Run(ctx context.Context) {
 	c.runCycle(ctx)
 	ticker := time.NewTicker(c.interval)
@@ -185,8 +185,8 @@ func (c *Checker) Run(ctx context.Context) {
 	}
 }
 
-// runCycle выполняет цикл сверки и логирует результат (отмена контекста при
-// остановке сервиса - не сбой и не попадает в счетчики ошибок).
+// runCycle executes a reconciliation cycle and logs the result (context cancellation
+// on service shutdown is not a failure and does not reach the error counters).
 func (c *Checker) runCycle(ctx context.Context) {
 	summary, err := c.Cycle(ctx)
 	if err != nil {
@@ -208,13 +208,13 @@ func (c *Checker) runCycle(ctx context.Context) {
 		zap.Int("errors", summary.Errors))
 }
 
-// Cycle выполняет один цикл сверки: выбирает следующую порцию счетов словаря
-// (round-robin) и сверяет окно [now - 2W, now - W).
+// Cycle executes one reconciliation cycle: selects the next portion of dictionary
+// accounts (round-robin) and reconciles the window [now - 2W, now - W).
 func (c *Checker) Cycle(ctx context.Context) (Summary, error) {
 	now := time.Now().UTC()
-	// Границы окна выравниваются до миллисекунд (точность DateTime64(3)):
-	// одинаковая граница на обеих сторонах исключает ложные расхождения
-	// на субмиллисекундной кромке.
+	// Window boundaries are truncated to milliseconds (DateTime64(3) precision):
+	// the same boundary on both sides excludes false discrepancies on the
+	// sub-millisecond edge.
 	from := now.Add(-2 * c.window).Truncate(time.Millisecond)
 	to := now.Add(-c.window).Truncate(time.Millisecond)
 	accountIDs, err := c.accountsForCycle(ctx)
@@ -276,14 +276,14 @@ func (c *Checker) Cycle(ctx context.Context) (Summary, error) {
 	return summary, nil
 }
 
-// accountResult описывает итог сверки одного счета.
+// accountResult describes the reconciliation outcome of a single account.
 type accountResult struct {
 	discrepancies []Discrepancy
 	truncated     bool
 }
 
-// checkAccount сверяет один счет: страницы Ledger (с постраничной агрегацией)
-// против агрегатов фактов.
+// checkAccount reconciles a single account: Ledger pages (with per-page aggregation)
+// against fact aggregates.
 func (c *Checker) checkAccount(ctx context.Context, accountID string, from, to time.Time) (accountResult, error) {
 	aggregates := make(map[string]storage.TxAggregate)
 	cursor := ""
@@ -312,9 +312,9 @@ func (c *Checker) checkAccount(ctx context.Context, accountID string, from, to t
 	return accountResult{discrepancies: Compare(aggregates, facts)}, nil
 }
 
-// accountsForCycle выбирает следующую порцию счетов словаря после курсора с
-// заворотом на начало (обход со временем покрывает весь словарь). Курсор не
-// обновляется здесь: сдвиг выполняет Cycle по фактически обработанным счетам.
+// accountsForCycle selects the next portion of dictionary accounts after the cursor
+// with a wrap to the beginning (the walk eventually covers the whole dictionary).
+// The cursor is not updated here: Cycle advances it by the accounts actually processed.
 func (c *Checker) accountsForCycle(ctx context.Context) ([]string, error) {
 	page, err := storage.DimAccountPage(ctx, c.db, c.cursor, c.accounts)
 	if err != nil {
@@ -340,10 +340,10 @@ func (c *Checker) accountsForCycle(ctx context.Context) ([]string, error) {
 	return page, nil
 }
 
-// advanceCursor двигает курсор обхода: если ни один счет порции не обработан,
-// курсор остается на месте (порция повторится следующим циклом); частичные
-// сбои не блокируют обход (курсор идет за последним обработанным счетом);
-// завершенный круг начинается заново.
+// advanceCursor advances the walk cursor: if no account of the portion was processed,
+// the cursor stays in place (the portion repeats on the next cycle); partial failures
+// do not block the walk (the cursor follows the last processed account); a completed
+// lap starts anew.
 func (c *Checker) advanceCursor(accounts []string, anyProcessed bool, processed string) {
 	if !anyProcessed || processed == "" {
 		return
@@ -355,7 +355,7 @@ func (c *Checker) advanceCursor(accounts []string, anyProcessed bool, processed 
 	c.cursor = ""
 }
 
-// String описывает расхождение для логов и тестов.
+// String describes the discrepancy for logs and tests.
 func (d Discrepancy) String() string {
 	return fmt.Sprintf("%s %s ledger=%+v fact=%+v", d.Kind, d.TransactionID, d.Ledger, d.Fact)
 }

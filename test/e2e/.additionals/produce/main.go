@@ -1,10 +1,10 @@
-// produce публикует тестовые события CBL для e2e сервиса reporting.
-// Запуск из каталога сервиса: go run ./test/e2e/produce -scenario full
-// Сценарии: full - четыре события (payment/ledger/payout/recon), печатает
-// идентификаторы для проверок; duplicate - повтор события payment; broken -
-// битое сообщение, затем валидное (проверка устойчивости конвейера); sentinel -
-// событие в партицию исходного. Флаг -live ставит occurred_at текущим временем
-// (сверка reporting с Ledger в e2e).
+// produce publishes test CBL events for the reporting service e2e.
+// Run from the service directory: go run ./test/e2e/produce -scenario full
+// Scenarios: full - four events (payment/ledger/payout/recon), prints
+// identifiers for checks; duplicate - a repeat of the payment event; broken -
+// a broken message followed by a valid one (pipeline resilience check);
+// sentinel - an event into the partition of the original one. The -live flag
+// sets occurred_at to the current time (reporting check against Ledger in e2e).
 package main
 
 import (
@@ -20,19 +20,19 @@ import (
 	"github.com/cbl/cbl-reporting/test/producer"
 )
 
-// main разбирает флаги и выполняет сценарий публикации.
+// main parses the flags and runs the publish scenario.
 func main() {
-	brokerList := flag.String("brokers", "localhost:9092", "список брокеров через запятую")
-	scenario := flag.String("scenario", "full", "сценарий: full, duplicate, broken, sentinel")
-	paymentID := flag.String("payment-id", "", "payment_id для duplicate/broken/sentinel")
-	eventID := flag.String("event-id", "", "event_id для duplicate")
-	key := flag.String("key", "", "ключ партиции для sentinel (payment_id исходного события)")
-	live := flag.Bool("live", false, "ставить occurred_at текущим временем (окно сверки e2e)")
+	brokerList := flag.String("brokers", "localhost:9092", "comma-separated list of brokers")
+	scenario := flag.String("scenario", "full", "scenario: full, duplicate, broken, sentinel")
+	paymentID := flag.String("payment-id", "", "payment_id for duplicate/broken/sentinel")
+	eventID := flag.String("event-id", "", "event_id for duplicate")
+	key := flag.String("key", "", "partition key for sentinel (payment_id of the original event)")
+	live := flag.Bool("live", false, "set occurred_at to the current time (e2e reconciliation window)")
 	flag.Parse()
 
-	// Окно сверки reporting отсчитывается от текущего времени: сценарии
-	// проверки сверки публикуются с occurred_at=now, остальные - с фиксированным
-	// временем для стабильных проверок значений.
+	// The reporting check window counts from the current time: check scenarios
+	// are published with occurred_at=now, the others - with a fixed time for
+	// stable value checks.
 	if *live {
 		producer.OccurredAt = time.Now().UTC()
 	}
@@ -63,16 +63,16 @@ func main() {
 			producer.OccurredAt.Format(time.RFC3339Nano))
 	case "duplicate":
 		if *paymentID == "" || *eventID == "" {
-			exitOnError(fmt.Errorf("duplicate требует -payment-id и -event-id"))
+			exitOnError(fmt.Errorf("duplicate requires -payment-id and -event-id"))
 		}
 		payment, err := producer.PaymentCompleted(*eventID, *paymentID, "m-1")
 		exitOnError(err)
 		events = []producer.Event{payment}
 	case "sentinel":
-		// sentinel публикуется в партицию исходного события (тот же ключ):
-		// ожидание sentinel доказывает обработку более раннего дубля.
+		// sentinel is published into the partition of the original event (same key):
+		// waiting for sentinel proves that the earlier duplicate was processed.
 		if *paymentID == "" || *key == "" {
-			exitOnError(fmt.Errorf("sentinel требует -payment-id и -key"))
+			exitOnError(fmt.Errorf("sentinel requires -payment-id and -key"))
 		}
 		sentinel, err := producer.PaymentCompleted(uuid.NewString(), *paymentID, "m-1")
 		exitOnError(err)
@@ -81,7 +81,7 @@ func main() {
 		fmt.Printf("sentinel_payment_id=%s\n", *paymentID)
 	case "broken":
 		if *paymentID == "" {
-			exitOnError(fmt.Errorf("broken требует -payment-id"))
+			exitOnError(fmt.Errorf("broken requires -payment-id"))
 		}
 		broken := producer.Event{Topic: "payment.events", Key: "broken", Headers: map[string]string{
 			"event_id":   uuid.NewString(),
@@ -92,13 +92,13 @@ func main() {
 		events = []producer.Event{broken, valid}
 		fmt.Printf("after_broken_payment_id=%s\n", *paymentID)
 	default:
-		exitOnError(fmt.Errorf("неизвестный сценарий: %s", *scenario))
+		exitOnError(fmt.Errorf("unknown scenario: %s", *scenario))
 	}
 
 	exitOnError(producer.Publish(ctx, brokers, events))
 }
 
-// exitOnError завершает процесс с ошибкой.
+// exitOnError terminates the process with an error.
 func exitOnError(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

@@ -1,51 +1,56 @@
 # cbl-reporting
 
-Отчетность из ClickHouse: конвейер событий Kafka (Kafka engine + materialized view),
-хранилище `reporting.fact_*`, словарь счетов `dim_accounts` и сверка с Ledger.
+Reporting from ClickHouse: the Kafka event pipeline (Kafka engine + materialized view),
+the `reporting.fact_*` storage, the `dim_accounts` account vocabulary and reconciliation
+against the Ledger.
 
-Роль сервиса и контракты: `AGENTS.md`. Глобальные правила платформы: `../../AGENTS.md`,
+The service role and contracts: `AGENTS.md`. Platform-wide rules: `../../AGENTS.md`,
 `../../.specs/CBL-000-system-description.md`, `../../.specs/CBL-003-contracts.md`.
 
-## Команды
+## Commands
 
 ```powershell
-make build             # сборка
-make test              # unit-тесты
+make build             # build
+make test              # unit tests
 make test-integration  # integration (testcontainers: Kafka, ClickHouse)
-make cover             # объединенное покрытие unit+integration
-make e2e               # compose-стенд: конвейер (11.2) и словарь/сверка (11.3)
+make cover             # merged unit+integration coverage
 make vet               # go vet
-make lint              # golangci-lint в Docker
-make up                # сервисный стенд: kafka, schema-registry, clickhouse, ledger-stub, reporting
+make lint              # golangci-lint in Docker
+make up                # service stand: kafka, schema-registry, clickhouse, ledger-stub, reporting
 make down
 ```
 
-## Конвейер
+E2E: the run is performed by an agent following `test/e2e/E2E.md` (the ingestion,
+vocabulary, reports scenarios); artifacts go to `test/e2e/.runs/<UTC mark>/`, auxiliary
+files to `test/e2e/.additionals/`.
 
-Топики `payment.events`, `ledger.events`, `payout.events`, `recon.alerts` читаются
-ClickHouse Kafka engine, materialized view пишут в `fact_*` (дедупликация
-ReplacingMergeTree по `event_id`/`alert_id`). Wire-схема декодирования -
-`deploy/format_schemas/events.proto` (уплощение `cbl-protos@cf-3.4`), монтируется в
-`format_schema_path` ClickHouse. Миграции схемы - `migrations/` (goose, диалект
-clickhouse), применяются сервисом при старте; Kafka-таблицы и MV реконсилируются из
-`KAFKA_BROKERS`/`SCHEMA_PATH`.
+## Pipeline
 
-## Словарь и сверка (11.3)
+The topics `payment.events`, `ledger.events`, `payout.events`, `recon.alerts` are read
+by the ClickHouse Kafka engine, materialized views write into `fact_*` (ReplacingMergeTree
+deduplication by `event_id`/`alert_id`). The decoding wire schema is
+`deploy/format_schemas/events.proto` (a flattening of `cbl-protos@cf-3.4`), mounted into
+the ClickHouse `format_schema_path`. Schema migrations live in `migrations/` (goose,
+clickhouse dialect) and are applied by the service at startup; Kafka tables and MVs are
+reconciled from `KAFKA_BROKERS`/`SCHEMA_PATH`.
 
-`dim_accounts` наполняется воркером: счета мерчантов из `LedgerService.ListMerchantAccounts`,
-системные (`clearing`, `fee`, `suspense`) - деривацией `account_id` по плану счетов
-(`CBL-003`, раздел 9; golden-векторы). Новые строки леджера обогащаются на входе
-(JOIN в MV), история - мутациями backfill. Воркер сверки периодически сравнивает
-окно проводок (`fact_ledger_entries` FINAL) с `ListEntries` Ledger и отражает
-расхождения (`missing_in_reporting`, `extra_in_reporting`, `amount_mismatch`) в
-логах и счетчиках `/metrics`: это контроль достоверности конвейера, не денежные
-решения (T-09) и не `recon.alerts` (зона Reconciler).
+## Vocabulary and reconciliation (11.3)
 
-## Отчеты Query (11.4)
+`dim_accounts` is populated by a worker: merchant accounts from
+`LedgerService.ListMerchantAccounts`, system accounts (`clearing`, `fee`, `suspense`) by
+`account_id` derivation from the account plan (`CBL-003`, section 9; golden vectors). New
+ledger rows are enriched on input (a JOIN in the MV), the history is processed by backfill
+mutations. The reconciliation worker periodically compares a window of entries
+(`fact_ledger_entries` FINAL) with the Ledger `ListEntries` and reflects discrepancies
+(`missing_in_reporting`, `extra_in_reporting`, `amount_mismatch`) in logs and `/metrics`
+counters: this is pipeline integrity control, not money decisions (T-09) and not
+`recon.alerts` (the Reconciler domain).
 
-gRPC `billing.reporting.v1.ReportingService.Query` (:9110) отдает страницы закрытого
-каталога: `payments`, `payouts`, `ledger_entries` (мерчантский фильтр по
-денормализации 11.3) и `turnover` (`group_by`: `asset`, `day_asset`). Курсор - keyset
-по ключам сортировки отчета, лимит до 100 строк, деньги - канонические десятичные
-строки. Прокси мерчант API - `GET /v1/reports/{report_type}` в `cbl-billing-api`
-(мерчант из токена).
+## Query reports (11.4)
+
+gRPC `billing.reporting.v1.ReportingService.Query` (:9110) serves pages of the closed
+catalog: `payments`, `payouts`, `ledger_entries` (the merchant filter based on the 11.3
+denormalization) and `turnover` (`group_by`: `asset`, `day_asset`). The cursor is keyset
+over the report sort keys, the limit is up to 100 rows, money is canonical decimal
+strings. The merchant API proxy is `GET /v1/reports/{report_type}` in `cbl-billing-api`
+(merchant from the token).

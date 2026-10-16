@@ -1,130 +1,69 @@
-# CBL-11.3. Словарь dim_accounts, backfill и сверка Reporting с Ledger
+# CBL-11.3. The dim_accounts dictionary, backfill and Reporting vs Ledger reconciliation
 
-| Поле | Значение |
+| Field | Value |
 | :-- | :-- |
-| Эпик | E11, `Reporting и ClickHouse` |
-| Репозиторий | `cbl-reporting` |
-| Размер | M |
-| Волна и параллельная группа | W3-REPORT |
-| Зависит от | `CBL-11.2` (конвейер), контракты `cbl-protos@cf-3.2` (LedgerService) |
-| Версия контрактов | `cbl-protos@cf-3.4` (Ledger gRPC без изменений с cf-3.2) |
-| Статус | done, ревью закрыто |
+| Epic | E11, `Reporting and ClickHouse` |
+| Repository | `cbl-reporting` |
+| Size | M |
+| Wave and parallel group | W3-REPORT |
+| Depends on | `CBL-11.2` (pipeline), contracts `cbl-protos@cf-3.2` (LedgerService) |
+| Contract version | `cbl-protos@cf-3.4` (Ledger gRPC unchanged since cf-3.2) |
+| Status | done, review closed |
 
-## 1. Контекст и цель
+## 1. Context and goal
 
-`CBL-11.1` заложил в `fact_ledger_entries` денормализованные колонки `account_type` и
-`merchant_id` и зафиксировал: словарь `dim_accounts` наполняет 11.3 (мерчантские счета
-через `ListMerchantAccounts` 2.10, системные - деривация по детерминированным
-`account_id` плана счетов, `CBL-003` §9, golden-векторы леджера); до наполнения колонки
-пусты и отчеты не блокируются. `CBL-11.2` наполнил факты, оставив колонки пустыми
-(KI-reporting-05) и вынес финальную часть исходной задачи 11.3: "Дедупликация
-(ReplacingMergeTree), проверка расхождений с леджером".
+`CBL-11.1` laid down the denormalized columns `account_type` and `merchant_id` in `fact_ledger_entries` and fixed: the `dim_accounts` dictionary is filled by 11.3 (merchant accounts via `ListMerchantAccounts` 2.10, system accounts - derivation by the deterministic `account_id` of the chart of accounts, `CBL-003`, section 9, ledger golden vectors); until it is filled the columns are empty and reports are not blocked. `CBL-11.2` filled the facts leaving the columns empty (KI-reporting-05) and moved out the final part of the original task 11.3: "Deduplication (ReplacingMergeTree), checking discrepancies with the ledger".
 
-Задача 11.3 закрывает три части:
+Task 11.3 closes three parts:
 
-1. словарь `reporting.dim_accounts` и его периодическое наполнение;
-2. backfill истории `account_type`/`merchant_id` фактов леджера;
-3. периодическая сверка данных Reporting с Ledger (контроль достоверности конвейера:
-   расхождения фиксируются метриками и логами, денежных решений из ClickHouse нет, T-09).
+1. the `reporting.dim_accounts` dictionary and its periodic filling;
+2. backfill of the `account_type`/`merchant_id` history of ledger facts;
+3. periodic reconciliation of Reporting data with Ledger (control of pipeline validity: discrepancies are recorded by metrics and logs, there are no money decisions from ClickHouse, T-09).
 
-## 2. Границы
+## 2. Scope
 
-In scope: миграция `dim_accounts`, наполнение словаря (gRPC `ListMerchantAccounts`,
-деривация системных счетов), обогащение новых строк леджера в MV, backfill истории,
-периодическая сверка с `ListEntries` (окно, пагинация, классификация расхождений,
-счетчики и логи), gRPC-клиент Ledger, воркеры и env сервиса, stub Ledger для e2e,
-compose-сервис stub, интеграционные тесты и e2e `vocabulary.ps1`, AGENTS/README.
+In scope: the `dim_accounts` migration, dictionary filling (gRPC `ListMerchantAccounts`, derivation of system accounts), enrichment of new ledger rows in the MV, history backfill, periodic reconciliation with `ListEntries` (window, pagination, discrepancy classification, counters and logs), the Ledger gRPC client, service workers and env, a Ledger stub for e2e, the compose stub service, integration tests and `vocabulary.ps1` e2e, AGENTS/README.
 
-Out of scope: gRPC `ReportingService.Query` и прокси `/v1/reports` (11.4); дашборды (11.5);
-`recon.alerts` и бизнес-сверка шлюза (9.x, зона Reconciler); ретеншен/TTL и квоты (14.7);
-mTLS и авторизация gRPC (0.6, KI-ledger-02); перенос вывода `account_id` в `cbl-kit`
-(KI-ledger-08, до старта 7.4/10.2); сетевые/адресные поля выплат
-(`PayoutEvent` их не несет; отчета, которому они нужны, пока нет).
+Out of scope: gRPC `ReportingService.Query` and the `/v1/reports` proxy (11.4); dashboards (11.5); `recon.alerts` and gateway business reconciliation (9.x, Reconciler's area); retention/TTL and quotas (14.7); mTLS and gRPC authorization (0.6, KI-ledger-02); moving the `account_id` derivation into `cbl-kit` (KI-ledger-08, before the start of 7.4/10.2); network/address fields of payouts (`PayoutEvent` does not carry them; there is no report that needs them yet).
 
-## 3. Функциональные требования
+## 3. Functional requirements
 
-FR-1. Словарь `reporting.dim_accounts` (миграция `00002_dim_accounts.sql`):
-`account_id String`, `account_type LowCardinality(String)`, `merchant_id String`,
-`asset LowCardinality(String)`, `decimals UInt8`, `updated_at DateTime64(3, 'UTC')`;
-`ENGINE = ReplacingMergeTree(updated_at)`, `ORDER BY account_id`; читатели - `FINAL`.
+FR-1. The `reporting.dim_accounts` dictionary (migration `00002_dim_accounts.sql`): `account_id String`, `account_type LowCardinality(String)`, `merchant_id String`, `asset LowCardinality(String)`, `decimals UInt8`, `updated_at DateTime64(3, 'UTC')`; `ENGINE = ReplacingMergeTree(updated_at)`, `ORDER BY account_id`; readers - `FINAL`.
 
-FR-2. Наполнение словаря (воркер `vocabulary`, цикл `DIM_REFRESH_INTERVAL`):
+FR-2. Dictionary filling (the `vocabulary` worker, cycle `DIM_REFRESH_INTERVAL`):
 
-- требуемое покрытие из фактов: платежи требуют строку `merchant`, выплаты -
-  `payout` по паре (мерчант, актив, шкала); пара без строки словаря запускает
-  пересинхронизацию мерчанта (ловит новых мерчантов и новые активы известных);
-- мерчантские счета: `LedgerService.ListMerchantAccounts(merchant_ref)`; в словарь
-  вносятся отсутствующие и изменившиеся строки (diff по `account_id`); строки
-  ответа валидируются формой `account_id`, правилами актива, шкалы и типа;
-- системные счета: `SELECT DISTINCT asset, decimals` из `fact_ledger_entries` (FINAL) -
-  для каждой пары выводятся `clearing`, `fee`, `suspense` по правилу `CBL-003` §9
-  (UUIDv5) и вносятся с `merchant_id = ''`;
-- бюджет мерчантов на цикл с ротацией: хвост больших наборов не голодает (курсор
-  по кругу, покрытие пересчитывается каждый цикл);
-- `updated_at = now` у вносимых строк; ошибка Ledger или ClickHouse в цикле - WARN,
-  цикл повторяется через интервал; старт сервиса от доступности Ledger не зависит
-  (`readyz` - про ClickHouse и конвейер).
+- required coverage from the facts: payments require a `merchant` row, payouts - `payout` by the (merchant, asset, scale) tuple; a tuple without a dictionary row triggers resynchronization of the merchant (catches new merchants and new assets of known ones);
+- merchant accounts: `LedgerService.ListMerchantAccounts(merchant_ref)`; missing and changed rows (diff by `account_id`) are written into the dictionary; response rows are validated by the `account_id` shape and the asset, scale and type rules;
+- system accounts: `SELECT DISTINCT asset, decimals` from `fact_ledger_entries` (FINAL) - for each pair `clearing`, `fee`, `suspense` are derived by the rule of `CBL-003`, section 9 (UUIDv5) and written with `merchant_id = ''`;
+- merchant budget per cycle with rotation: the tail of large sets does not starve (cursor round-robin, coverage is recalculated every cycle);
+- `updated_at = now` of the written rows; a Ledger or ClickHouse error in a cycle - WARN, the cycle repeats after the interval; service startup does not depend on Ledger availability (`readyz` is about ClickHouse and the pipeline).
 
-FR-3. Обогащение при загрузке: MV `fact_ledger_entries_mv` джойнит словарь
-(`LEFT JOIN reporting.dim_accounts FINAL ON account_id`) и пишет `account_type`/
-`merchant_id`; счет, отсутствующий в словаре, дает пустые значения (поведение 11.2),
-backfill догоняет позже. Выборка MV меняется - отпечаток конвейера (T-RPT-01)
-пересоздает пару при старте; данные фактов не затрагиваются.
+FR-3. Enrichment at ingestion: the MV `fact_ledger_entries_mv` joins the dictionary (`LEFT JOIN reporting.dim_accounts FINAL ON account_id`) and writes `account_type`/`merchant_id`; an account missing in the dictionary yields empty values (11.2 behavior), backfill catches up later. The MV select changes - the pipeline fingerprint (T-RPT-01) recreates the pair at startup; fact data is not affected.
 
-FR-4. Backfill истории (цикл после refresh): счета из словаря с непустыми строками
-`account_type = ''` (FINAL, лимит `BACKFILL_LIMIT` на цикл, детерминированный порядок;
-счета вне словаря не выбираются - бюджет не голодает на legacy-строках) сверяются со
-словарем; для найденных выполняется мутация `ALTER TABLE reporting.fact_ledger_entries
-UPDATE account_type = ..., merchant_id = ... WHERE account_id = ... AND account_type = ''`
-(идемпотентно, сходится к полному словарю).
+FR-4. History backfill (a cycle after refresh): accounts from the dictionary with non-empty row sets of `account_type = ''` (FINAL, `BACKFILL_LIMIT` per cycle, deterministic order; accounts outside the dictionary are not selected - the budget does not starve on legacy rows) are compared with the dictionary; for the found ones the mutation is executed: `ALTER TABLE reporting.fact_ledger_entries UPDATE account_type = ..., merchant_id = ... WHERE account_id = ... AND account_type = ''` (idempotent, converges to the full dictionary).
 
-FR-5. Сверка с Ledger (воркер `ledgercheck`, цикл `LEDGER_CHECK_INTERVAL`):
+FR-5. Reconciliation with Ledger (the `ledgercheck` worker, cycle `LEDGER_CHECK_INTERVAL`):
 
-- окно сверки `[now - 2W, now - W)` (`W = LEDGER_CHECK_WINDOW`): отставание на окно
-  защищает от ложных "нет в Reporting" для свежих событий;
-- обход счетов словаря round-robin (`LEDGER_CHECK_ACCOUNTS` за цикл); курсор
-  двигается за обработанные счета, при полном сбое порции остается на месте
-  (порция повторится), частичные сбои обход не блокируют;
-- Ledger: `ListEntries(account_id, period, limit)` страницами до `LEDGER_CHECK_MAX_PAGES`;
-  превышение - счет пропускается со счетчиком `truncated`; страницы агрегируются
-  постранично (память ограничена транзакциями окна, не числом страниц);
-- ClickHouse: агрегация по `transaction_id` (количество проводок, суммы debit/credit) из
-  `fact_ledger_entries` FINAL за окно;
-- классификация: `missing_in_reporting` (есть в Ledger, нет в фактах),
-  `extra_in_reporting`, `amount_mismatch` (количество или суммы расходятся);
-- каждое расхождение - WARN-лог (счет, транзакция, ожидание/факт), итог цикла - INFO;
-  `recon.alerts` не публикуются, денежных решений нет (T-09).
+- reconciliation window `[now - 2W, now - W)` (`W = LEDGER_CHECK_WINDOW`): lagging by a window protects from false "missing in Reporting" for fresh events;
+- traversal of dictionary accounts round-robin (`LEDGER_CHECK_ACCOUNTS` per cycle); the cursor advances for processed accounts, on a complete failure of a batch it stays in place (the batch will repeat), partial failures do not block the traversal;
+- Ledger: `ListEntries(account_id, period, limit)` in pages up to `LEDGER_CHECK_MAX_PAGES`; exceeding - the account is skipped with a `truncated` counter; pages are aggregated page by page (memory is limited by the window transactions, not by the number of pages);
+- ClickHouse: aggregation by `transaction_id` (number of entries, debit/credit sums) from `fact_ledger_entries` FINAL for the window;
+- classification: `missing_in_reporting` (present in Ledger, absent in the facts), `extra_in_reporting`, `amount_mismatch` (count or sums differ);
+- every discrepancy - a WARN log (account, transaction, expected/actual), the cycle summary - INFO; `recon.alerts` are not published, there are no money decisions (T-09).
 
-FR-6. gRPC-клиент Ledger: `LEDGER_GRPC_ADDR` (обязателен, host:port), plaintext (mTLS -
-0.6), таймаут вызовов `LEDGER_TIMEOUT` (default 5s), клиент переиспользуется воркерами.
+FR-6. Ledger gRPC client: `LEDGER_GRPC_ADDR` (required, host:port), plaintext (mTLS - 0.6), call timeout `LEDGER_TIMEOUT` (default 5s), the client is reused by the workers.
 
-FR-7. main: новые env (`LEDGER_GRPC_ADDR`, `LEDGER_TIMEOUT`, `DIM_REFRESH_INTERVAL`,
-`DIM_MERCHANTS_LIMIT` - бюджет мерчантов на цикл, `BACKFILL_LIMIT`,
-`LEDGER_CHECK_INTERVAL`, `LEDGER_CHECK_WINDOW` (не меньше интервала),
-`LEDGER_CHECK_ACCOUNTS`, `LEDGER_CHECK_PAGE_LIMIT`, `LEDGER_CHECK_MAX_PAGES`),
-воркеры стартуют после миграций и
-реконсиляции, останавливаются по контексту сигнала (ожидание завершения раньше серверов),
-счетчики (словарь, backfill, сверка) отдаются в текстовом Prometheus-формате на `/metrics`
-(имя семейства в `# TYPE` без меток; полный набор метрик платформы - 0.7).
+FR-7. main: new env (`LEDGER_GRPC_ADDR`, `LEDGER_TIMEOUT`, `DIM_REFRESH_INTERVAL`, `DIM_MERCHANTS_LIMIT` - merchant budget per cycle, `BACKFILL_LIMIT`, `LEDGER_CHECK_INTERVAL`, `LEDGER_CHECK_WINDOW` (not less than the interval), `LEDGER_CHECK_ACCOUNTS`, `LEDGER_CHECK_PAGE_LIMIT`, `LEDGER_CHECK_MAX_PAGES`), the workers start after migrations and reconciliation, stop by the signal context (waiting for completion before the servers), counters (dictionary, backfill, reconciliation) are exposed in text Prometheus format on `/metrics` (the family name in `# TYPE` without labels; the full platform metric set - 0.7).
 
-FR-8. Тесты: unit (golden-векторы деривации, разбор env, сравнение агрегатов и слияние
-страниц, валидация строк Ledger и мутаций, курсор и бюджет обхода),
-integration (testcontainers ClickHouse + stub Ledger): наполнение словаря, обогащение при
-загрузке с populated словарем, backfill истории, все классы расхождений, пагинация и
-truncated, идемпотентный повтор refresh; e2e compose: stub Ledger, наполнение словаря,
-backfill, цикл сверки без расхождений и с контролируемым расхождением (счетчики `/metrics`).
+FR-8. Tests: unit (derivation golden vectors, env parsing, aggregation comparison and page merging, validation of Ledger rows and mutations, cursor and traversal budget), integration (testcontainers ClickHouse + Ledger stub): dictionary filling, enrichment at ingestion with a populated dictionary, history backfill, all discrepancy classes, pagination and truncated, idempotent refresh repeat; compose e2e: Ledger stub, dictionary filling, backfill, a reconciliation cycle without discrepancies and with a controlled discrepancy (`/metrics` counters).
 
-## 4. Контракты
+## 4. Contracts
 
-- gRPC (клиент): `billing.ledger.v1.LedgerService.ListMerchantAccounts`,
-  `ListEntries` (`cbl-protos@cf-3.2`, без изменений; Alias: `merchant_ref` - бизнес-ссылка
-  мерчанта, `Entry` - проводка с `transaction_id`, `direction`, `amount`, `created_at`).
-- ClickHouse: `reporting.dim_accounts` (новая, владелец - сервис), чтение `fact_*` FINAL;
-  выдача `Query`/`/v1/reports` - 11.4, контракт `CBL-003` §7 не меняется (описательная
-  часть дополняется словарем).
-- Kafka, REST: без изменений (healthz/readyz, метрики).
+- gRPC (client): `billing.ledger.v1.LedgerService.ListMerchantAccounts`, `ListEntries` (`cbl-protos@cf-3.2`, unchanged; Alias: `merchant_ref` - the merchant business reference, `Entry` - an entry with `transaction_id`, `direction`, `amount`, `created_at`).
+- ClickHouse: `reporting.dim_accounts` (new, owner - the service), reading `fact_*` FINAL; serving `Query`/`/v1/reports` - 11.4, the contract of `CBL-003`, section 7, does not change (the descriptive part is extended with the dictionary).
+- Kafka, REST: unchanged (healthz/readyz, metrics).
 
-## 5. Модель данных и миграции
+## 5. Data model and migrations
 
 ```sql
 CREATE TABLE IF NOT EXISTS reporting.dim_accounts
@@ -140,139 +79,73 @@ ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY account_id;
 ```
 
-Деривация `account_id` системных счетов (`CBL-003` §9, репликация):
+Derivation of `account_id` of system accounts (`CBL-003`, section 9, replication):
 
 ```
 account_id = UUIDv5(uuid.NameSpaceURL, "cbl:ledger:account:v1:<type>:<asset>:<decimals>:<merchant_ref>")
 ```
 
-Golden-векторы к воспроизведению (тест): `clearing/USDT/2/` ->
-`dec27141-ec8f-55de-a325-04a35cd6b0f2`, `fee/USDT/0/` ->
-`8ee4265f-342c-5dbc-8d80-2516a5641b59`, `suspense/USDT/2/` ->
-`cb2ccbda-92f9-5889-ba9f-c7ec90b8cfa0`, `merchant/USDT/2/m-1` ->
-`58686062-c133-5d4e-b08b-0d33a0db924f` и остальные из таблицы `CBL-003` §9.
+Golden vectors to reproduce (test): `clearing/USDT/2/` -> `dec27141-ec8f-55de-a325-04a35cd6b0f2`, `fee/USDT/0/` -> `8ee4265f-342c-5dbc-8d80-2516a5641b59`, `suspense/USDT/2/` -> `cb2ccbda-92f9-5889-ba9f-c7ec90b8cfa0`, `merchant/USDT/2/m-1` -> `58686062-c133-5d4e-b08b-0d33a0db924f` and the rest from the table in `CBL-003`, section 9.
 
-## 6. Правила и решения
+## 6. Rules and decisions
 
-- MV с JOIN: `LEFT JOIN (SELECT account_id, account_type, merchant_id FROM
-  reporting.dim_accounts FINAL)` - без словаря
-  ClickHouse (dict DDL с `SOURCE(CLICKHOUSE(...))` требует явных учетных данных в DDL);
-  `FINAL` в правой части исключает размножение строк на несхлопнутых дублях словаря;
-  per-block hash join по маленькому словарю дешев; изменения словаря видны новым
-  вставкам без пересоздания MV.
-- Backfill - мутация по узкому предикату (`account_type = ''`): сходится, не трогает
-  обогащенные строки; лимит счетов на цикл против лавины мутаций; асинхронность мутаций
-  ClickHouse не ожидается (следующий цикл досчитает остаток).
-- Сверка - round-robin по словарю, а не по транзакциям: глобального перечисления
-  транзакций нет ни в контракте Ledger, ни в фактах (fact-таблица - не источник истины);
-  обход словаря также детектирует полную потерю счетом всех событий за окно.
-- Сверка не публикует `recon.alerts` (зона Reconciler 9.2): расхождения reporting-конвейера
-  - метрики и логи; калибровка порогов и вынос в алертинг - 14.x/0.7.
-- Ложные `missing_in_reporting` при событиях, пришедших в Kafka позже чем через окно
-  после `occurred_at`, допустимы и видны в логах; окно с лагом `W` минимизирует их;
-  повторная сверка следующего окна не выполняется (одно окно - один проход).
-- Старт не зависит от Ledger: словарь и сверка деградируют (WARN, счетчики), конвейер и
-  `readyz` живут; KI фиксирует деградацию.
-- KI-ledger-08: деривация воспроизведена по golden-векторам, перенос в `cbl-kit` -
-  до старта 7.4/10.2 (отдельная задача по KI).
+- MV with JOIN: `LEFT JOIN (SELECT account_id, account_type, merchant_id FROM reporting.dim_accounts FINAL)` - without the ClickHouse dictionary (dict DDL with `SOURCE(CLICKHOUSE(...))` requires explicit credentials in DDL); `FINAL` in the right part excludes row multiplication on uncollapsed dictionary duplicates; a per-block hash join over a small dictionary is cheap; dictionary changes are visible to new inserts without recreating the MV.
+- Backfill - a mutation by a narrow predicate (`account_type = ''`): converges, does not touch enriched rows; a per-cycle account limit against an avalanche of mutations; ClickHouse mutation asynchrony is not awaited (the next cycle counts the remainder).
+- Reconciliation - round-robin over the dictionary, not over transactions: there is no global enumeration of transactions either in the Ledger contract or in the facts (the fact table is not a source of truth); traversal of the dictionary also detects a complete loss of all events by an account for the window.
+- Reconciliation does not publish `recon.alerts` (Reconciler's area 9.2): discrepancies of the reporting pipeline - metrics and logs; threshold calibration and moving to alerting - 14.x/0.7.
+- False `missing_in_reporting` for events that arrived in Kafka later than a window after `occurred_at` are acceptable and visible in logs; the window with lag `W` minimizes them; re-checking the next window is not performed (one window - one pass).
+- Startup does not depend on Ledger: the dictionary and reconciliation degrade (WARN, counters), the pipeline and `readyz` live; the KI records the degradation.
+- KI-ledger-08: the derivation is reproduced by golden vectors, moving it into `cbl-kit` - before the start of 7.4/10.2 (a separate task per the KI).
 
 ## 7. Edge cases
 
-- Мерчант без счетов в Ledger: пустой ответ - не ошибка, записей нет (нет проводок).
-- Повторные доставки Kafka: факты схлопываются FINAL; сверка читает FINAL; словарь
-  схлопывается ReplacingMergeTree(updated_at).
-- `account_id` из фактов вне плана счетов (legacy): записи словаря нет, строка остается с
-  пустыми значениями, мутация не запускается.
-- Словарь пополняется после первой пачки событий: строки между refresh не обогащаются,
-  backfill закрывает разрыв; полностью история сходится за конечное число циклов.
-- Сверка счета без проводок за окно: пустые множества с обеих сторон - совпадение, счет
-  проверен.
-- Ledger недоступен в цикле: WARN, счетчики ошибок; при полном сбое порции курсор не
-  двигается (порция повторится следующим циклом), частичные сбои обход не блокируют
-  (курсор идет за последним обработанным счетом); отмена контекста при остановке не
-  считается сбоем.
-- `ListEntries` страниц больше лимита: счет пропущен (truncated), без классификации
-  расхождений по нему.
-- decimals актива, не встречавшегося в плане: системные счета деривируются тем же ключом
-  (детерминированно), коллизий нет.
+- A merchant without accounts in Ledger: an empty response is not an error, there are no records (no entries).
+- Kafka redeliveries: facts collapse with FINAL; reconciliation reads FINAL; the dictionary collapses with ReplacingMergeTree(updated_at).
+- `account_id` from facts outside the chart of accounts (legacy): there is no dictionary record, the row stays with empty values, the mutation is not triggered.
+- The dictionary is filled after the first batch of events: rows between refreshes are not enriched, backfill closes the gap; the whole history converges in a finite number of cycles.
+- Reconciliation of an account without entries for the window: empty sets on both sides - a match, the account is checked.
+- Ledger unavailable in a cycle: WARN, error counters; on a complete failure of a batch the cursor does not move (the batch will repeat in the next cycle), partial failures do not block the traversal (the cursor advances past the last processed account); context cancellation on shutdown is not counted as a failure.
+- `ListEntries` pages more than the limit: the account is skipped (truncated), without classification of discrepancies for it.
+- decimals of an asset that never appeared in the chart: system accounts are derived by the same key (deterministically), there are no collisions.
 
-## 8. Нефункциональные требования
+## 8. Non-functional requirements
 
-Задержка обогащения: refresh - интервал (default 5m), backfill - следующий цикл после
-refresh; сверка - интервал (default 5m), окно с лагом. Нагрузка: refresh - запросы к
-Ledger только по мерчантам с невыполненным покрытием (обычно только новые); сверка -
-не более `LEDGER_CHECK_ACCOUNTS` счетов и `LEDGER_CHECK_MAX_PAGES * LEDGER_CHECK_PAGE_LIMIT`
-проводок на счет за цикл (ограничена конфигом), страницы агрегируются постранично
-(память - транзакции окна; произведение PAGE_LIMIT x MAX_PAGES осознанно - граница
-до 1M проводок на счет за цикл при максимумах конфига). Периодические FINAL-сканы
-фактов и мутации backfill при
-росте объемов профилируются в 14.2 (KI-reporting-11). Безопасность: gRPC plaintext
-до 0.6 (KI-reporting-08), значения из Ledger валидируются перед записью (форма
-`account_id`, правила актива, шкалы и типа, паттерн ссылки мерчанта), параметры в SQL
-биндутся драйвером; DSN/адреса не логируются с секретами.
+Enrichment latency: refresh - the interval (default 5m), backfill - the next cycle after refresh; reconciliation - the interval (default 5m), a window with lag. Load: refresh - requests to Ledger only for merchants with unfulfilled coverage (usually only new ones); reconciliation - at most `LEDGER_CHECK_ACCOUNTS` accounts and `LEDGER_CHECK_MAX_PAGES * LEDGER_CHECK_PAGE_LIMIT` entries per account per cycle (limited by config), pages are aggregated page by page (memory - window transactions; the PAGE_LIMIT x MAX_PAGES product is deliberate - a bound of up to 1M entries per account per cycle at maximum config). Periodic FINAL scans of facts and backfill mutations as volumes grow are profiled in 14.2 (KI-reporting-11). Security: gRPC plaintext until 0.6 (KI-reporting-08), values from Ledger are validated before writing (the `account_id` shape and the asset, scale and type rules, the merchant reference pattern), parameters in SQL are bound by the driver; DSN/addresses are not logged with secrets.
 
-## 9. План тестов
+## 9. Test plan
 
-| Уровень | Сценарии |
+| Level | Scenarios |
 | :-- | :-- |
-| Unit | деривация `account_id` по всем golden-векторам `CBL-003` §9; разбор и валидация env (интервалы, лимиты, адрес); сравнение агрегатов (все классы расхождений, совпадение, слияние страниц, неизвестное направление); валидация строк Ledger (`dimRow`) и мутаций (`BackfillAccount`) |
-| Integration | testcontainers ClickHouse + stub Ledger (gRPC на случайном порту): первый refresh наполняет словарь (мерчантские из stub, системные производные от фактов); новый актив известного мерчанта доезжает пересинхронизацией; новое событие после наполнения обогащается на входе (JOIN MV); старое событие обогащается backfill; повторный refresh идемпотентен; сверка с совпадающими проводками - 0 расхождений, stub-лишняя проводка - `missing_in_reporting`, другая сумма - `amount_mismatch`, строка CH без Ledger - `extra_in_reporting`; проводки вне окна молчат; превышение max pages - truncated без классификации; полный сбой порции не двигает курсор; недоступный Ledger не роняет цикл |
-| E2E локальный | compose: kafka, schema-registry, clickhouse, ledger-stub, reporting; наполнение словаря (stub аккаунты + системные), backfill непустых `account_type`/`merchant_id`, цикл сверки: `/metrics` `checked > 0` и расхождения по счетчику (управляемый кейс); down -v |
-| E2E глобальный | GE-7 (после 11.4); здесь сервисный стенд |
-| Load | не применим (нет HTTP-нагрузки сервиса); конвейер - 14.2 |
+| Unit | derivation of `account_id` over all golden vectors of `CBL-003`, section 9; env parsing and validation (intervals, limits, address); aggregation comparison (all discrepancy classes, match, page merging, unknown direction); validation of Ledger rows (`dimRow`) and mutations (`BackfillAccount`) |
+| Integration | testcontainers ClickHouse + Ledger stub (gRPC on a random port): the first refresh fills the dictionary (merchant ones from the stub, system ones derived from the facts); a new asset of a known merchant arrives via resynchronization; a new event after filling is enriched at ingestion (the MV JOIN); an old event is enriched by backfill; a repeated refresh is idempotent; reconciliation with matching entries - 0 discrepancies, a stub-extra entry - `missing_in_reporting`, a different sum - `amount_mismatch`, a CH row without Ledger - `extra_in_reporting`; entries outside the window are silent; exceeding max pages - truncated without classification; a complete batch failure does not move the cursor; an unavailable Ledger does not crash the cycle |
+| E2E local | compose: kafka, schema-registry, clickhouse, ledger-stub, reporting; dictionary filling (stub accounts + system ones), backfill of non-empty `account_type`/`merchant_id`, reconciliation cycle: `/metrics` `checked > 0` and discrepancies by counter (a controlled case); down -v |
+| E2E global | GE-7 (after 11.4); the service stand here |
+| Load | not applicable (no HTTP load of the service); the pipeline - 14.2 |
 
-Целевое покрытие unit+integration: не ниже 80%.
+Target unit+integration coverage: at least 80%.
 
-## 10. План работ и коммит
+## 10. Work plan and commit
 
-Тесты вперед (unit golden-векторы, сравнение и валидация) -> миграция `dim_accounts` ->
-`internal/domain` (деривация) -> `internal/ledger` (клиент) -> `internal/storage`
-(dim-diff, backfill, MV JOIN) -> `internal/vocabulary` и `internal/ledgercheck` ->
-main (env, воркеры, метрики) -> stub и e2e -> прогоны (unit+integration+coverage, lint,
-vet, emdash, e2e) -> 4 ревью -> AGENTS/README/`CBL-003`/`CBL-004` -> коммит
-`CBL-11.3: словарь dim_accounts, backfill и сверка Reporting с Ledger`.
+Tests first (unit golden vectors, comparison and validation) -> the `dim_accounts` migration -> `internal/domain` (derivation) -> `internal/ledger` (client) -> `internal/storage` (dim-diff, backfill, MV JOIN) -> `internal/vocabulary` and `internal/ledgercheck` -> main (env, workers, metrics) -> stub and e2e -> runs (unit+integration+coverage, lint, vet, emdash, e2e) -> 4 reviews -> AGENTS/README/`CBL-003`/`CBL-004` -> commit `CBL-11.3: dim_accounts dictionary, backfill and Reporting vs Ledger reconciliation`.
 
-## 11. Ревью (CBL-001, шаг 6)
+## 11. Review (CBL-001, step 6)
 
-Четыре независимых прохода (16.10.2026) и верификация закрытия. Блокеры первого круга:
-невалидный Prometheus-формат `/metrics` (`# TYPE` с метками ломал бы скрейп) и
-несходимость словаря по новым счетам известных мерчантов (маркер «мерчант обойден» не
-пересматривался) - закрыты: формат печатает `# TYPE` один раз на семейство с именем без
-меток; синхронизация идет по требуемому покрытию фактов (платежи - `merchant`, выплаты -
-`payout` по паре мерчант/актив/шкала) с per-account diff, бюджетом `DIM_MERCHANTS_LIMIT`
-и ротацией. MAJOR по нагрузке (стоимость FINAL-сканов и мутаций) закрыт митигациями
-(выборка backfill только по счетам словаря с детерминированным порядком, постраничная
-агрегация сверки, сжатые границы страниц) и KI-reporting-11 с замером в 14.2. MINOR/NIT
-закрыты: курсор обхода не двигается при полном сбое порции и не блокируется частичными
-сбоями; отмена контекста не считается сбоем; `Aggregate` fail-closed на неизвестном
-направлении; границы окна выровнены по миллисекундам; параметры SQL биндятся драйвером
-(ручное экранирование удалено); `account_id` валидируется доменом; пустой
-`LEDGER_GRPC_ADDR` - явная ошибка; `LEDGER_CHECK_WINDOW >= LEDGER_CHECK_INTERVAL`;
-батч-вставки словаря ограничивают число партов; `FactMerchantPairs` с `DISTINCT`;
-`stop()` до остановки серверов; зонтичные CBL-000 и init/смоук стенда синхронизированы;
-документационные остатки закрыты. Верификация (четвертый круг) подтвердила закрытие всех
-замечаний; коммит не блокируется (пункт безопасности - отдельно: BLOCKER/MAJOR нет).
+Four independent passes (16.10.2026) and closure verification. Blockers of the first round: the invalid Prometheus format of `/metrics` (`# TYPE` with labels would break scraping) and non-convergence of the dictionary for new accounts of known merchants (the "merchant traversed" marker was not revisited) - closed: the format prints `# TYPE` once per family with a name without labels; synchronization goes by the required coverage of facts (payments - `merchant`, payouts - `payout` by the merchant/asset/scale tuple) with a per-account diff, the `DIM_MERCHANTS_LIMIT` budget and rotation. MAJOR on load (cost of FINAL scans and mutations) closed with mitigations (backfill selects only dictionary accounts with a deterministic order, page-by-page aggregation of reconciliation, tight page bounds) and KI-reporting-11 with measurement in 14.2. MINOR/NIT closed: the traversal cursor does not move on a complete batch failure and is not blocked by partial failures; context cancellation is not counted as a failure; `Aggregate` is fail-closed on an unknown direction; window bounds are aligned to milliseconds; SQL parameters are bound by the driver (manual escaping removed); `account_id` is validated by the domain; an empty `LEDGER_GRPC_ADDR` is an explicit error; `LEDGER_CHECK_WINDOW >= LEDGER_CHECK_INTERVAL`; batch inserts of the dictionary limit the number of parts; `FactMerchantPairs` with `DISTINCT`; `stop()` before stopping the servers; umbrella CBL-000 and the stand init/smoke are synchronized; documentation leftovers closed. Verification (the fourth round) confirmed closure of all findings; the commit is not blocked (the security point - separately: no BLOCKER/MAJOR).
 
-| Роль | Ключевые замечания | Закрытие |
+| Role | Key findings | Closure |
 | :-- | :-- | :-- |
-| Без контекста | BLOCKER: невалидный `# TYPE` с метками; MAJOR: курсор сверки против §7, несходимость словаря (нет diff изменившихся), unit SQL-план; MINOR/NIT: `LIMIT` без `ORDER BY`, накопление страниц, отмена как ошибка, IPv6, кромка окна | формат Prometheus + тест; `advanceCursor` (полный сбой не двигает, частичные не блокируют); покрытие из фактов + per-account diff + кейс нового актива; §9 переписан под факты; `IN dim + ORDER BY`; постраничная агрегация; отмена INFO; мс-выравнивание; батч-вставки; `DISTINCT` |
-| Архитектуры | MAJOR: `# TYPE`, несходимость словаря, стоимость FINAL-сканов/мутаций; MINOR: изоляция деградации Ledger, multi-instance, окно<интервал, gRPC-прием, CBL-000, цифры покрытия | формат; покрытие/ротация; KI-reporting-11 + митигации; KI-reporting-10/12; валидация W>=I; границы страниц; CBL-000 обновлен; `make cover`, 82.7% |
-| С контекстом | MAJOR: `# TYPE`, новые счета известного мерчанта, `FactMerchantPairs` без `DISTINCT`; MINOR: курсор, голодание backfill-бюджета, цифры, окно в e2e, unit-план, тексты, Makefile | все закрыты правками; e2e переписан (сид до окна, двухфазные события, ассерт стабильности мутаций); `DISTINCT` добавлен |
-| Безопасности | BLOCKER/MAJOR нет; MINOR: память страниц, лимит мерчантов, дубли `# TYPE`, pre-existing env в DDL (вне диффа); NIT: форма `account_id`, биндинг вместо экранирования, loopback стаба | постраничная агрегация и сжатые границы; лимит с ротацией; формат; вне диффа/backlog; `ValidAccountID`; параметризованный SQL; loopback |
+| No context | BLOCKER: invalid `# TYPE` with labels; MAJOR: reconciliation cursor vs section 7, dictionary non-convergence (no diff of changed ones), unit SQL plan; MINOR/NIT: `LIMIT` without `ORDER BY`, page accumulation, cancellation as an error, IPv6, window edge | Prometheus format + test; `advanceCursor` (a complete failure does not move it, partial ones do not block); coverage from facts + per-account diff + new asset case; section 9 rewritten for facts; `IN dim + ORDER BY`; page-by-page aggregation; INFO cancellation; ms alignment; batch inserts; `DISTINCT` |
+| Architecture | MAJOR: `# TYPE`, dictionary non-convergence, cost of FINAL scans/mutations; MINOR: isolation of Ledger degradation, multi-instance, window<interval, gRPC intake, CBL-000, coverage numbers | format; coverage/rotation; KI-reporting-11 + mitigations; KI-reporting-10/12; W>=I validation; page bounds; CBL-000 updated; `make cover`, 82.7% |
+| With context | MAJOR: `# TYPE`, new accounts of a known merchant, `FactMerchantPairs` without `DISTINCT`; MINOR: cursor, backfill budget starvation, numbers, window in e2e, unit plan, texts, Makefile | all closed with fixes; e2e rewritten (seed before the window, two-phase events, mutation stability assert); `DISTINCT` added |
+| Security | No BLOCKER/MAJOR; MINOR: page memory, merchant limit, duplicate `# TYPE`, pre-existing env in DDL (outside the diff); NIT: `account_id` shape, binding instead of escaping, stub loopback | page-by-page aggregation and tight bounds; limit with rotation; format; outside the diff/backlog; `ValidAccountID`; parameterized SQL; loopback |
 
-Принято осознанно: gRPC plaintext до Ledger (KI-reporting-08, mTLS - 0.6); мутации
-backfill и стоимость сканов (KI-reporting-09/11, замер 14.2); один писатель на стенд
-(KI-reporting-12); диагностические ложные missing у кромки окна (лаг W, калибровка 14.2);
-IPv6-адрес в `LEDGER_GRPC_ADDR` не поддерживается (конвенция host:port стендов).
+Accepted deliberately: gRPC plaintext to Ledger (KI-reporting-08, mTLS - 0.6); backfill mutations and scan cost (KI-reporting-09/11, measurement 14.2); one writer per stand (KI-reporting-12); diagnostic false missing at the window edge (lag W, calibration 14.2); an IPv6 address in `LEDGER_GRPC_ADDR` is not supported (stand host:port convention).
 
-## 12. Открытые вопросы и решения
+## 12. Open questions and decisions
 
-- JOIN вместо словаря ClickHouse: учетные данные не попадают в DDL, меньше сущностей;
-  цена - JOIN на вставке (дешев при малом словаре) и необходимость `FINAL` в правой части.
-- Сверка по счетам (round-robin), а не по мерчантам: счет - неделимая единица Ledger API.
-- Окно с лагом `W` и однократный проход: сверка диагностическая; повторная проверка окна
-  и ретраи - при подтверждении необходимости (14.x).
-- Backfill через мутацию, а не перезапись партиций: точечный предикат, сходимость,
-  минимум перезаписи; `ALTER UPDATE` - штатный механизм ClickHouse.
-- mTLS/авторизация gRPC Ledger - 0.6 (KI-ledger-02); сервис не публикует порт Ledger.
-- Ретеншен `dim_accounts` и прав пользователя миграций - 0.6/14.7.
+- JOIN instead of the ClickHouse dictionary: credentials do not get into the DDL, fewer entities; the price - a JOIN at insert (cheap with a small dictionary) and the need for `FINAL` in the right part.
+- Reconciliation by accounts (round-robin), not by merchants: an account is an indivisible unit of the Ledger API.
+- Window with lag `W` and a single pass: reconciliation is diagnostic; re-checking the window and retries - if the need is confirmed (14.x).
+- Backfill via a mutation, not partition rewrite: a narrow predicate, convergence, minimum rewrite; `ALTER UPDATE` is a standard ClickHouse mechanism.
+- mTLS/authorization of the Ledger gRPC - 0.6 (KI-ledger-02); the service does not publish the Ledger port.
+- Retention of `dim_accounts` and migration user rights - 0.6/14.7.

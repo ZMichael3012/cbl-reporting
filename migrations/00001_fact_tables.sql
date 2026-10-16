@@ -1,11 +1,13 @@
 -- +goose Up
--- Схемы отчетности ClickHouse (владелец с CBL-11.2 - cbl-reporting;
--- init cbl-system/deploy/clickhouse остается dev-bootstrap общего стенда).
--- База создается окружением (CLICKHOUSE_DB в compose) или ops; CREATE DATABASE
--- ниже - идемпотентная защита для ручного применения к существующему серверу.
--- Дедупликация at-least-once: event_id входит в ключ сортировки
--- ReplacingMergeTree (у алертов alert_id = event_id конверта); идентификаторы
--- хранятся строками (устойчивость MV-конвейера); читатели используют FINAL.
+-- ClickHouse reporting schemas (owned by cbl-reporting since CBL-11.2;
+-- the cbl-system/deploy/clickhouse init remains the dev bootstrap of the
+-- shared stand).
+-- The database is created by the environment (CLICKHOUSE_DB in compose) or
+-- ops; the CREATE DATABASE below is an idempotent guard for manual
+-- application to an existing server.
+-- At-least-once deduplication: event_id is part of the ReplacingMergeTree
+-- sort key (for alerts alert_id = envelope event_id); identifiers are stored
+-- as strings (MV pipeline resilience); readers use FINAL.
 CREATE DATABASE IF NOT EXISTS reporting;
 
 CREATE TABLE IF NOT EXISTS reporting.fact_payment_events

@@ -1,6 +1,6 @@
-// ledgerstub - e2e-сервис тестового Ledger для compose-стенда reporting:
-// gRPC LedgerService (словарь и сверка) плюс административный HTTP для сида
-// проводок (в продуктовый образ не входит).
+// ledgerstub is an e2e test Ledger service for the reporting compose stand:
+// gRPC LedgerService (vocabulary and check) plus an admin HTTP server for
+// seeding entries (not part of the production image).
 package main
 
 import (
@@ -17,7 +17,7 @@ import (
 	"github.com/cbl/cbl-reporting/test/ledgerstub"
 )
 
-// entrySeed описывает проводку в теле административного запроса.
+// entrySeed describes an entry in the admin request body.
 type entrySeed struct {
 	TransactionID string `json:"transaction_id"`
 	Direction     string `json:"direction"`
@@ -25,13 +25,13 @@ type entrySeed struct {
 	CreatedAt     string `json:"created_at"`
 }
 
-// entriesRequest описывает тело POST /entries.
+// entriesRequest describes the POST /entries request body.
 type entriesRequest struct {
 	AccountID string      `json:"account_id"`
 	Entries   []entrySeed `json:"entries"`
 }
 
-// main поднимает gRPC-сервер и административный HTTP-сервер до сигнала.
+// main starts the gRPC server and the admin HTTP server until a signal.
 func main() {
 	grpcAddr := getenv("STUB_GRPC_ADDR", ":9040")
 	httpAddr := getenv("STUB_HTTP_ADDR", ":9041")
@@ -99,7 +99,7 @@ func main() {
 	_ = httpSrv.Close()
 }
 
-// getenv возвращает переменную окружения или значение по умолчанию.
+// getenv returns the environment variable or the fallback value.
 func getenv(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

@@ -1,236 +1,257 @@
 # AGENTS.md - cbl-reporting
 
-Отчетность из ClickHouse: конвейер событий Kafka (Kafka engine + materialized view),
-хранилище `reporting.fact_*`, словарь счетов `dim_accounts` и сверка с Ledger.
+Reporting from ClickHouse: the Kafka event pipeline (Kafka engine + materialized view),
+the `reporting.fact_*` storage, the `dim_accounts` account vocabulary and reconciliation
+against the Ledger.
 
-Обязательные глобальные правила: `../../AGENTS.md`, `../../.specs/CBL-001-development-process.md`,
-`../../.specs/CBL-002-repos-and-docker.md`, контракты `../../.specs/CBL-003-contracts.md`.
-Длинное тире (U+2014) запрещено, используется только дефис.
+Mandatory global rules: `../../AGENTS.md`, `../../.specs/CBL-001-development-process.md`,
+`../../.specs/CBL-002-repos-and-docker.md`, the `../../.specs/CBL-003-contracts.md` contracts.
+The em dash (U+2014) is forbidden; only the hyphen is used.
 
-## 1. Границы
+## 1. Boundaries
 
-In scope: ClickHouse как хранилище сервиса (как PostgreSQL у сервисов с БД): миграции
-`fact_*` и `dim_accounts` (goose, диалект clickhouse), локальный инстанс в
-`deploy/docker-compose.yml`, testcontainers-интеграция (Kafka + ClickHouse) и e2e на
-compose сервиса; конвейер Kafka engine + materialized view по топикам `payment.events`,
-`ledger.events`, `payout.events`, `recon.alerts`; словарь `dim_accounts` (Ledger gRPC
-`ListMerchantAccounts` + деривация системных счетов), обогащение фактов леджера и
-backfill истории; периодическая сверка с Ledger `ListEntries` (метрики и логи); gRPC
-`billing.reporting.v1.ReportingService.Query` (каталог отчетов 11.4);
-административные `/healthz`/`/readyz`, gRPC health и счетчики `/metrics`.
+In scope: ClickHouse as the service storage (like PostgreSQL for DB-backed services):
+migrations of `fact_*` and `dim_accounts` (goose, clickhouse dialect), a local instance in
+`deploy/docker-compose.yml`, testcontainers integration (Kafka + ClickHouse) and e2e on the
+service compose; the Kafka engine + materialized view pipeline over the topics `payment.events`,
+`ledger.events`, `payout.events`, `recon.alerts`; the `dim_accounts` vocabulary (Ledger gRPC
+`ListMerchantAccounts` + derivation of system accounts), enrichment of ledger facts and
+history backfill; periodic reconciliation against the Ledger `ListEntries` (metrics and
+logs); gRPC `billing.reporting.v1.ReportingService.Query` (the 11.4 report catalog);
+administrative `/healthz`/`/readyz`, gRPC health and `/metrics` counters.
 
-Out of scope: прокси `/v1/reports` (зона `cbl-billing-api`, 11.4); новые типы отчетов
-(аддитивная контрактная задача после 15.4); дашборды
-(11.5); `recon.alerts` и бизнес-сверка шлюза (9.x, Reconciler); ретеншен/TTL и квоты
-(14.7); prod-кластер ClickHouse (0.6); mTLS и авторизация gRPC до Ledger (0.6,
-KI-ledger-02); перенос вывода `account_id` в `cbl-kit` (KI-ledger-08, до 7.4/10.2);
-Kafka Connect (T-10: только при строгом exactly-once).
+Out of scope: the `/v1/reports` proxy (`cbl-billing-api` domain, 11.4); new report types
+(an additive contract task after 15.4); dashboards
+(11.5); `recon.alerts` and gateway business reconciliation (9.x, Reconciler); retention/TTL
+and quotas (14.7); a prod ClickHouse cluster (0.6); mTLS and gRPC authorization to the
+Ledger (0.6, KI-ledger-02); moving the `account_id` derivation into `cbl-kit` (KI-ledger-08,
+until 7.4/10.2); Kafka Connect (T-10: only under strict exactly-once).
 
-## 2. Контракты
+## 2. Contracts
 
-- Kafka (потребление через Kafka engine ClickHouse, не собственным клиентом):
-  `payment.events`, `ledger.events`, `payout.events`, `recon.alerts`; заголовки конверта
-  `event_id`, `event_type`, `occurred_at` (cbl-kit/outbox); группы
+- Kafka (consumption via the ClickHouse Kafka engine, not a dedicated client):
+  `payment.events`, `ledger.events`, `payout.events`, `recon.alerts`; envelope headers
+  `event_id`, `event_type`, `occurred_at` (cbl-kit/outbox); groups
   `cbl-reporting-payment|ledger|payout|recon`; at-least-once.
-- gRPC клиент: `billing.ledger.v1.LedgerService` (`ListMerchantAccounts`,
-  `ListEntries`; `cbl-protos@cf-3.2`); plaintext внутри доверенной сети (mTLS - 0.6).
-- ClickHouse (база `reporting`): `fact_*`, `dim_accounts` (миграции; схема из CBL-11.1,
-  словарь - 11.3), `kafka_*` (Kafka engine, `kafka_handle_error_mode=stream`,
-  `kafka_skip_broken_messages=1000`), `<факт>_mv` (materialized view; MV леджера
-  джойнит словарь FINAL).
-- REST: `/healthz`, `/readyz` (readyz проверяет доступность ClickHouse и полноту
-  конвейера: четыре пары Kafka-таблица+MV; статус отражается и в gRPC health).
-- gRPC сервер: `grpc.health.v1` и `billing.reporting.v1.ReportingService.Query` (:9110;
-  каталог 11.4: `payments`, `payouts`, `ledger_entries`, `turnover` с whitelist
-  `group_by`; контракт cf-3).
-- Метрики: `/metrics` (:9310) - текстовые счетчики словаря, backfill и сверки
-  (полный набор и Prometheus-клиент - 0.7).
+- gRPC client: `billing.ledger.v1.LedgerService` (`ListMerchantAccounts`,
+  `ListEntries`; `cbl-protos@cf-3.2`); plaintext inside the trusted network (mTLS - 0.6).
+- ClickHouse (database `reporting`): `fact_*`, `dim_accounts` (migrations; the schema comes
+  from CBL-11.1, the vocabulary from 11.3), `kafka_*` (Kafka engine,
+  `kafka_handle_error_mode=stream`, `kafka_skip_broken_messages=1000`), `<fact>_mv`
+  (materialized view; the ledger MV joins the vocabulary FINAL).
+- REST: `/healthz`, `/readyz` (readyz checks ClickHouse availability and pipeline
+  completeness: four Kafka-table+MV pairs; the status is also reflected in gRPC health).
+- gRPC server: `grpc.health.v1` and `billing.reporting.v1.ReportingService.Query` (:9110;
+  the 11.4 catalog: `payments`, `payouts`, `ledger_entries`, `turnover` with the `group_by`
+  whitelist; contract cf-3).
+- Metrics: `/metrics` (:9310) - text counters of the vocabulary, backfill and reconciliation
+  (the full set and the Prometheus client - 0.7).
 
-## 3. Архитектура
+## 3. Architecture
 
 ```
-cmd/reporting/          # main: миграции, реконсиляция, воркеры словаря и сверки, gRPC
-internal/config/        # разбор и валидация env (fail-fast)
-internal/domain/        # деривация account_id плана счетов (golden-векторы CBL-003 §9)
-internal/ledger/        # gRPC-клиент LedgerService (счета мерчанта, выписки)
-internal/storage/       # Open/Ping/Migrate, Pipeline (реконсиляция), dim и сверка (SQL)
-internal/vocabulary/    # воркер словаря dim_accounts и backfill истории
-internal/ledgercheck/   # воркер сверки с Ledger (окно, round-robin, классификация)
-internal/reports/       # каталог отчетов Query (валидация, курсор, формат значений)
-internal/transport/     # gRPC-транспорт ReportingService (коды ошибок)
-internal/metrics/       # счетчики и текстовый Prometheus-формат /metrics
-migrations/             # goose-миграции fact_* и dim_accounts (владелец - сервис)
-deploy/format_schemas/  # wire-схема декодирования (уплощение cbl-protos@cf-3.4)
-deploy/clickhouse-config/ # format_schema_path для ClickHouse сервиса
-test/producer/          # тестовые protobuf-события (integration/e2e)
-test/ledgerstub/        # тестовый LedgerService (gRPC) для integration/e2e
-test/e2e/               # ingestion.ps1, vocabulary.ps1, produce, ledgerstub
+cmd/reporting/          # main: migrations, reconciliation, vocabulary and check workers, gRPC
+internal/config/        # env parsing and validation (fail-fast)
+internal/domain/        # account plan account_id derivation (golden vectors CBL-003 section 9)
+internal/ledger/        # gRPC client of LedgerService (merchant accounts, statements)
+internal/storage/       # Open/Ping/Migrate, Pipeline (reconciliation), dim and check (SQL)
+internal/vocabulary/    # dim_accounts vocabulary worker and history backfill
+internal/ledgercheck/   # Ledger check worker (window, round-robin, classification)
+internal/reports/       # Query report catalog (validation, cursor, value formatting)
+internal/transport/     # gRPC transport of ReportingService (error codes)
+internal/metrics/       # counters and the /metrics text Prometheus format
+migrations/             # goose migrations of fact_* and dim_accounts (owned by the service)
+deploy/format_schemas/  # decoding wire schema (cbl-protos@cf-3.4 flattening)
+deploy/clickhouse-config/ # format_schema_path for the service ClickHouse
+test/producer/          # test protobuf events (integration/e2e)
+test/ledgerstub/        # test LedgerService (gRPC) for integration/e2e
+test/e2e/               # E2E.md (run instructions), .additionals (utilities), .runs (artifacts)
 ```
 
-Ключевые решения: сервис не держит собственного Kafka-клиента (T-RPT-05); Kafka-таблицы
-и MV реконсилируются при старте из env (T-RPT-01), факты и словарь - goose-миграции;
-gRPC-сервер поднят с интерцептором `grpcmw.UnaryServer` (panic recovery, request-id);
-wire-схема - wire-совместимое уплощение контрактов без импортов (T-RPT-02; ClickHouse
-не резолвит импорты, а Kafka engine запрещает абсолютный путь - используется
-`format_schema_path`); `_headers` в 24.8 - `Array(Tuple(name, value))` (доступ через
-`arrayFirst`); алиас, совпадающий с именем колонки, перекрывает ее для остальных
-выражений SELECT (кортежи переименовываются в подзапросе MV); обогащение словарем -
-JOIN с `FINAL` в правой части (T-RPT-07); backfill - мутации по узкому предикату
-(T-RPT-08); сверка - окно с лагом и round-robin по счетам (T-RPT-09).
+Key decisions: the service keeps no dedicated Kafka client (T-RPT-05); Kafka tables
+and MVs are reconciled at startup from env (T-RPT-01), facts and the vocabulary are goose
+migrations; the gRPC server runs with the `grpcmw.UnaryServer` interceptor (panic recovery,
+request-id); the wire schema is a wire-compatible flattening of the contracts without
+imports (T-RPT-02; ClickHouse does not resolve imports, and the Kafka engine forbids an
+absolute path - `format_schema_path` is used); `_headers` in 24.8 is
+`Array(Tuple(name, value))` (accessed via `arrayFirst`); an alias matching a column name
+shadows it for the remaining SELECT expressions (tuples are renamed in the MV subquery);
+vocabulary enrichment is a JOIN with `FINAL` on the right side (T-RPT-07); backfill uses
+mutations with a narrow predicate (T-RPT-08); reconciliation uses a window with a lag and
+round-robin over accounts (T-RPT-09).
 
-Библиотеки: стандартный набор (`CBL-002` §6): Gin, zap, grpc, goose (диалект clickhouse),
-`clickhouse-go/v2`; testcontainers (Kafka, ClickHouse). `AutoMigrate` запрещен.
+Libraries: the standard set (`CBL-002` section 6): Gin, zap, grpc, goose (clickhouse
+dialect), `clickhouse-go/v2`; testcontainers (Kafka, ClickHouse). `AutoMigrate` is forbidden.
 
-## 4. Команды
+## 4. Commands
 
 ```powershell
 make build             # go build ./...
 make test              # go test ./...
 make test-integration  # integration (testcontainers: Kafka, ClickHouse)
-make cover             # объединенное покрытие unit+integration (cover.out)
-make e2e               # compose-стенд: конвейер (11.2), словарь/сверка (11.3), отчеты (11.4)
-make vet               # go vet ./... (+ теги integration e2e)
-make lint              # golangci-lint в Docker (контекст services/ для cbl-kit)
-make up                # стенд: kafka, schema-registry, clickhouse, ledger-stub, reporting
-make down              # стенд + volume
+make cover             # merged unit+integration coverage (cover.out)
+make vet               # go vet ./... (+ integration e2e tags)
+make lint              # golangci-lint in Docker (services/ context for cbl-kit)
+make up                # stand: kafka, schema-registry, clickhouse, ledger-stub, reporting
+make down              # stand + volume
 ```
 
-## 5. Порты и окружение
+E2E: the run is performed by an agent following `test/e2e/E2E.md` (platform-independent:
+bring up the stand, execute the ingestion/vocabulary/reports scenarios, save artifacts to
+`test/e2e/.runs/<UTC mark>/`, mandatory `summary.md`); there are no PowerShell run
+scripts, auxiliary files live in `test/e2e/.additionals/` (`CBL-002` section 7).
 
-HTTP `8110`, gRPC `9110`, метрики `9310`.
-Переменные: `CLICKHOUSE_DSN` (обязателен, `clickhouse://cbl:...@host:9000/reporting`),
-`KAFKA_BROKERS` (обязателен; внутренний листенер для ClickHouse, `kafka:29092` в compose),
-`SCHEMA_PATH` (`events.proto` относительно `format_schema_path` ClickHouse; абсолютный
-путь Kafka engine запрещает), `MIGRATIONS_DIR` (`./migrations`; в образе
-`/app/migrations`), `HTTP_ADDR`, `GRPC_ADDR`, `METRICS_ADDR`, `LEDGER_GRPC_ADDR`
-(обязателен, host:port), `LEDGER_TIMEOUT` (5s; 1s - 60s), `DIM_REFRESH_INTERVAL`
+## 5. Ports and environment
+
+HTTP `8110`, gRPC `9110`, metrics `9310`.
+Variables: `CLICKHOUSE_DSN` (required, `clickhouse://cbl:...@host:9000/reporting`),
+`KAFKA_BROKERS` (required; the internal listener for ClickHouse, `kafka:29092` in compose),
+`SCHEMA_PATH` (`events.proto` relative to the ClickHouse `format_schema_path`; the Kafka
+engine forbids an absolute path), `MIGRATIONS_DIR` (`./migrations`; `/app/migrations` in
+the image), `HTTP_ADDR`, `GRPC_ADDR`, `METRICS_ADDR`, `LEDGER_GRPC_ADDR`
+(required, host:port), `LEDGER_TIMEOUT` (5s; 1s - 60s), `DIM_REFRESH_INTERVAL`
 (5m; 1s - 24h), `DIM_MERCHANTS_LIMIT` (200; 1 - 10000), `BACKFILL_LIMIT`
-(1000; 1 - 100000), `LEDGER_CHECK_INTERVAL` (5m), `LEDGER_CHECK_WINDOW` (5m; не
-меньше интервала - иначе между циклами остаются непроверенные отрезки),
-`LEDGER_CHECK_ACCOUNTS` (10), `LEDGER_CHECK_PAGE_LIMIT` (1000; до 10000),
-`LEDGER_CHECK_MAX_PAGES` (10; до 100). Невалидные значения - отказ старта.
+(1000; 1 - 100000), `LEDGER_CHECK_INTERVAL` (5m), `LEDGER_CHECK_WINDOW` (5m; not
+less than the interval - otherwise unchecked segments remain between cycles),
+`LEDGER_CHECK_ACCOUNTS` (10), `LEDGER_CHECK_PAGE_LIMIT` (1000; up to 10000),
+`LEDGER_CHECK_MAX_PAGES` (10; up to 100). Invalid values - startup failure.
 
-## 6. Правила разработки
+## 6. Development rules
 
-- Конвейер: SDD-спека в `.specs/` -> тесты вперед -> код -> 4 ревью -> AGENTS -> прогоны ->
-  коммит `CBL-<эпик>.<номер>: ...` (спека в том же коммите).
-- Изменение колонок фактов: только аддитивно, новой goose-миграцией; wire-схема
-  расширяется тем же номером поля контракта (номера buf не переиспользуются).
-- Покрытие unit+integration не ниже 80% (текущее - 86.5%); интеграционные проверки
-  конвейера - только на реальных Kafka и ClickHouse (testcontainers), не на моках.
-- Деньги только int64 в минимальных единицах плюс decimals; float запрещен (в CH -
-  Int64 + asset + decimals UInt8, решения о балансе из ClickHouse запрещены, T-09).
-- Битые сообщения Kafka пропускаются с логированием, партиция не останавливается.
-- Docstring на русском в стиле godoc; ошибки через `%w`; панки в бизнес-коде запрещены.
+- Pipeline: an SDD spec in `.specs/` -> tests first -> code -> 4 reviews -> AGENTS -> runs ->
+  commit `CBL-<epic>.<number>: ...` (the spec is part of the same commit).
+- E2E: a mandatory local run following `test/e2e/E2E.md` (an agent, no PowerShell scripts);
+  artifacts go to `test/e2e/.runs/<UTC mark>/` (mandatory `summary.md`, `compose-ps.txt`,
+  `compose-logs.txt`, scenario and check outputs), auxiliary files to
+  `test/e2e/.additionals/`.
+- Comments and docstrings are written in English in all repository files (including specs,
+  AGENTS.md, README, configurations); exceptions: identifiers, linter directives,
+  protocol and contract field names; log and error messages are not translated (they are
+  grepped by tests). Comments explain why, in full sentences.
+- Changing fact columns: additively only, via a new goose migration; the wire schema is
+  extended with the same contract field number (buf numbers are not reused).
+- Unit+integration coverage is at least 80% (currently 86.5%); pipeline integration checks
+  run only on real Kafka and ClickHouse (testcontainers), never on mocks.
+- Money is int64 only in minor units plus decimals; float is forbidden (in CH -
+  Int64 + asset + decimals UInt8, balance decisions from ClickHouse are forbidden, T-09).
+- Broken Kafka messages are skipped with logging, the partition does not halt.
+- Docstring in English in the godoc style; errors via `%w`; panics in business code are
+  forbidden.
 
-## 7. SLO и метрики
+## 7. SLO and metrics
 
-SLO уточняется в задаче 14.4. Задержка конвейера - секунды; словарь - интервал refresh,
-сверка - интервал с окном с лагом. `/metrics` отдает счетчики словаря, backfill и сверки
-(частично закрывает KI-reporting-04); полный набор (consumer lag, latency, Prometheus-клиент)
-после 0.7. Нагрузка конвейера - 14.2.
+The SLO is refined in task 14.4. Pipeline latency is seconds; the vocabulary follows the
+refresh interval, reconciliation the interval with a lagged window. `/metrics` serves the
+vocabulary, backfill and reconciliation counters (partially closing KI-reporting-04); the
+full set (consumer lag, latency, Prometheus client) comes after 0.7. Pipeline load - 14.2.
 
 ## 8. Trade-offs
 
-| ID | Решение | Плюсы | Минусы и компенсация |
+| ID | Decision | Pros | Cons and compensation |
 | :-- | :-- | :-- | :-- |
-| T-RPT-01 | Kafka-таблицы и MV реконсилируются сервисом при старте; ожидаемое определение пары сворачивается в отпечаток (sha256 от DDL обоих объектов) и хранится в `COMMENT` | ловится любой дрейф (брокеры включая сокращение списка, схема, колонки, выборка) без разбора нормализованного DDL; отсутствующий MV восстанавливается | DDL конвейера вне истории миграций | факты - строго goose; пересоздание не трогает данные; реконсиляция рассчитана на одного писателя (масштабирование реплик - 14.2/0.6) |
-| T-RPT-02 | Wire-схема - уплощение контрактов `deploy/format_schemas/events.proto`; для infra-only стенда копии в `deploy/clickhouse` зонтичного репозитория | ClickHouse не требует импортов и монтирования репозитория контрактов; infra-запуск без клона сервисов | дублирование номеров полей и файлов-копий | номера и типы повторяют `cbl-protos@cf-3.4` (buf запрещает переиспользование номеров); интеграционные тесты шлют реальные protobuf; синхронность копий проверяет `check-clickhouse.ps1` (KI-reporting-06) |
-| T-RPT-03 | ClickHouse - хранилище сервиса (как PostgreSQL у сервисов с БД): схема, миграции, compose и тесты в репозитории | автономность, единая конвенция; глобальный стенд не требуется для тестов | плюс один инстанс ClickHouse в dev | глобальный compose держит общий стенд (T-08); init cbl-system - dev-bootstrap |
-| T-RPT-04 | Битые сообщения пропускаются (`kafka_skip_broken_messages=1000`, `handle_error_mode=stream`) | конвейер не останавливается на poison-сообщении | ошибочные события не попадают в факты | счетчик ошибок в логах ClickHouse; разбор и DLQ-пересылка - 11.3 при необходимости |
-| T-RPT-05 | Сервис не держит собственного Kafka-клиента (консьюмер - Kafka engine) | меньше кода и зависимостей; масштабирование через `kafka_num_consumers` | нет тонкой обработки в Go | фильтры и маппинг - в MV; gRPC-слой 11.4 не зависит от Kafka |
-| T-RPT-06 | Кортежи Money/Timestamp переименовываются в подзапросе MV | обход перекрытия алиасов ClickHouse (алиас гасит одноименную колонку) | читаемость SQL | зафиксировано тестом `TestBuildViewDDL`; проверено на 24.8 |
-| T-RPT-07 | Обогащение словарем - JOIN c `(SELECT ... FROM dim_accounts FINAL)` в MV, без словаря ClickHouse | нет учетных данных в DDL, меньше сущностей, изменения словаря видны новым вставкам | JOIN на вставке и необходимость FINAL в правой части | словарь мал (счет на мерчанта/актив), per-block hash join дешев; FINAL исключает размножение строк; отсутствующий счет дает пустые значения, backfill догоняет |
-| T-RPT-08 | Backfill истории - мутации `ALTER UPDATE ... WHERE account_type = ''` по счетам словаря (лимит на цикл, выборка только счетов из словаря с детерминированным порядком) | точечная перезапись, идемпотентность, сходимость к полному словарю, бюджет цикла не голодает на legacy-строках | мутации асинхронны и переписывают части; при большом отсталом объеме нужны несколько циклов | `WHERE account_type = ''` безопасен и сходится; лимит `BACKFILL_LIMIT`; очередь мутаций и стоимость сканов - KI-reporting-09/11, профиль 14.2 |
-| T-RPT-09 | Сверка с Ledger: round-robin по счетам словаря, окно `[now-2W, now-W)`, страницы агрегируются постранично, результат - логи и счетчики | нет глобального перечисления транзакций в контракте Ledger; полная потеря событий счетом детектируется; окно с лагом гасит ложные missing; память - транзакции окна | полный обход словаря растянут (accountsPerCycle за цикл); ложные missing при задержке событий больше W; однократная проверка окна; курсор в памяти - один писатель на стенд (KI-reporting-12) | окно и лимиты конфигурируемы; при полном сбое порции курсор не двигается; расхождения - диагностика (T-09), не алерты и не денежные решения; калибровка - 14.2 |
-| T-RPT-10 | Отчеты Query: закрытый каталог в коде, keyset-курсор (ключи сортировки), `limit+1` и отдача лимита ≤100, `group_by` только из whitelist типа, деньги - канонические десятичные строки | пользовательский ввод не попадает в SQL; пагинация стабильна при вставках; нет float; каталожный дрейф виден тестами | новый отчет - задача с версией каталога; keyset-курсор привязан к сортировке отчета; агрегаты только per-asset (суммы шкал не смешиваются) | курсор непрозрачен и валидируется; лимиты контракта; каталог в спеке 11.4 |
+| T-RPT-01 | Kafka tables and MVs are reconciled by the service at startup; the expected pair definition is folded into a fingerprint (sha256 of the DDL of both objects) stored in `COMMENT` | any drift is caught (brokers including a shortened list, schema, columns, query) without parsing the normalized DDL; a missing MV is restored | pipeline DDL is outside migration history | facts are goose-only; recreation does not touch data; reconciliation assumes a single writer (replica scaling - 14.2/0.6) |
+| T-RPT-02 | The wire schema is a flattening of the `deploy/format_schemas/events.proto` contracts; for an infra-only stand, copies live in `deploy/clickhouse` of the umbrella repository | ClickHouse requires no imports and no mounting of the contracts repository; infra startup without cloning the services | duplicated field numbers and copy files | numbers and types repeat `cbl-protos@cf-3.4` (buf forbids number reuse); integration tests send real protobuf; copy sync is checked by `check-clickhouse.ps1` (KI-reporting-06) |
+| T-RPT-03 | ClickHouse is the service storage (like PostgreSQL for DB-backed services): schema, migrations, compose and tests in the repository | autonomy, a single convention; the global stand is not required for tests | one more ClickHouse instance in dev | the global compose keeps a shared stand (T-08); the cbl-system init is a dev bootstrap |
+| T-RPT-04 | Broken messages are skipped (`kafka_skip_broken_messages=1000`, `handle_error_mode=stream`) | the pipeline does not stop on a poison message | erroneous events never reach the facts | an error counter in the ClickHouse logs; triage and DLQ forwarding - 11.3 if needed |
+| T-RPT-05 | The service keeps no dedicated Kafka client (the consumer is the Kafka engine) | less code and fewer dependencies; scaling via `kafka_num_consumers` | no fine-grained processing in Go | filters and mapping live in the MV; the 11.4 gRPC layer does not depend on Kafka |
+| T-RPT-06 | Money/Timestamp tuples are renamed in the MV subquery | works around ClickHouse alias shadowing (an alias suppresses the same-named column) | SQL readability | recorded by the `TestBuildViewDDL` test; verified on 24.8 |
+| T-RPT-07 | Vocabulary enrichment is a JOIN with `(SELECT ... FROM dim_accounts FINAL)` in the MV, without the ClickHouse dictionary | no credentials in the DDL, fewer entities, vocabulary changes are visible to new inserts | a JOIN on insert and the need for FINAL on the right side | the vocabulary is small (accounts per merchant/asset), the per-block hash join is cheap; FINAL excludes row multiplication; a missing account yields empty values, backfill catches up |
+| T-RPT-08 | History backfill uses `ALTER UPDATE ... WHERE account_type = ''` mutations over vocabulary accounts (a per-cycle limit, only vocabulary accounts selected in a deterministic order) | pinpoint rewrite, idempotence, convergence to the full vocabulary, the cycle budget does not starve on legacy rows | mutations are asynchronous and rewrite parts; a large lagging volume needs several cycles | `WHERE account_type = ''` is safe and converges; the `BACKFILL_LIMIT` cap; the mutation queue and scan cost - KI-reporting-09/11, profile 14.2 |
+| T-RPT-09 | Ledger reconciliation: round-robin over vocabulary accounts, window `[now-2W, now-W)`, pages are aggregated page by page, the result is logs and counters | there is no global transaction enumeration in the Ledger contract; a complete event loss by an account is detected; the lagged window suppresses false missing; memory holds only window transactions | a full vocabulary walk is stretched (accountsPerCycle per cycle); false missing when event delay exceeds W; a single check of the window; the in-memory cursor - one writer per stand (KI-reporting-12) | the window and limits are configurable; on a complete batch failure the cursor does not move; discrepancies are diagnostics (T-09), not alerts or money decisions; calibration - 14.2 |
+| T-RPT-10 | Query reports: a closed catalog in code, a keyset cursor (sort keys), `limit+1` and a served limit ≤100, `group_by` only from the type whitelist, money as canonical decimal strings | user input never reaches SQL; pagination is stable under inserts; no float; catalog drift is visible to tests | a new report is a task with a catalog version; the keyset cursor is tied to the report sorting; aggregates are per-asset only (sums of different scales never mix) | the cursor is opaque and validated; contract limits; the catalog lives in the 11.4 spec |
 
 ## 9. Known issues
 
-| ID | Проблема | Влияние | План | Статус |
+| ID | Problem | Impact | Plan | Status |
 | :-- | :-- | :-- | :-- | :-- |
-| KI-reporting-01 | CI и pre-commit не настроены | линтеры запускаются вручную | задача 0.2 | open |
-| KI-reporting-02 | ClickHouse стенда работает с `CLICKHOUSE_DO_NOT_CHOWN=1` и root-процессом (ro-монтирование wire-схемы) | dev-конвенция; prod-права и пользователь миграций не разделены | разделение прав, read-only-профиль, TLS - 0.6/14.7 | open |
-| KI-reporting-03 | Нагрузочный профиль отсутствует (нет HTTP-нагрузки до 11.4) | пропускная способность конвейера не измерена | 14.2 (Kafka -> ClickHouse), профиль Query - 11.4 | open |
-| KI-reporting-04 | Квоты и лимиты аналитических запросов не заданы; `/metrics` - только счетчики сервиса (без Prometheus-клиента) | тяжелый период `Query` (агрегат turnover по всей истории) может влиять на ingestion; нет consumer lag и latency | `Query` ограничен лимитом 100 строк и keyset-пагинацией; readonly/max_memory_usage/max_execution_time - 14.7; полный набор метрик - 0.7 | open |
-| KI-reporting-05 | `dim_accounts` наполнен не мгновенно: строки между циклами refresh и backfill временно содержат пустые `account_type`/`merchant_id` (до первого цикла на новом стенде) | фильтр по мерчанту в 11.4 не покрывает промежуточные строки до сходимости циклов | ЗАКРЫТ 16.10.2026: словарь, обогащение на входе и backfill реализованы (11.3); сходимость - целевое свойство, свежесть строк - по интервалам env | closed |
-| KI-reporting-06 | Wire-схема и конфиг format_schema продублированы в зонтичном `deploy/clickhouse` (для инфраструктурного запуска без клона сервисов) | расхождение копий сломает декодирование на общем стенде | синхронность проверяет `scripts/check-clickhouse.ps1` (SHA256); при переносе схемы на строковый источник - снять копии | open |
-| KI-reporting-07 | Integration-тест Kafka использует фиксированный свободный порт хоста (окно TOCTOU при параллельном CI) | редкий флейк при гонке за порт | динамический проброс после старта либо координация портов - при стабилизации CI (0.2) | open |
-| KI-reporting-08 | gRPC-канал до Ledger - plaintext, клиент не запрашивает TLS/authN | подмена адреса Ledger в сети стенда дает ложный словарь и сверку; ложные расхождения | mTLS/авторизация межсервисных вызовов - 0.6 (KI-ledger-02); порт Ledger не публиковать вне доверенной зоны; прод запрещен до 0.6 | open |
-| KI-reporting-09 | Backfill - мутации на каждом цикле по счетам с пустым `account_type`; на большом отсталом объеме очередь мутаций растет | перезапись партиций конкурирует с ingestion за ресурсы | лимит `BACKFILL_LIMIT`; при систематике - батчи/расписание (14.2/14.7); `WHERE account_type = ''` не трогает обогащенные строки | open |
-| KI-reporting-10 | Мерчанты с грязным `merchant_id` в фактах (вне плана счетов) логируются WARN каждый цикл; мерчанты с невыполнимым покрытием (несогласованные данные стенда) перезапрашиваются у Ledger каждый цикл (бюджет `DIM_MERCHANTS_LIMIT` с ротацией - хвост не голодает, но вызовы повторяются) | шум в логах на постоянных грязных данных; лишние вызовы Ledger | дедупликация предупреждений и «карантин» непокрываемых мерчантов после k попыток (при подтверждении); данные чинит источник-сервис | open |
-| KI-reporting-11 | Стоимость периодических FINAL-сканов фактов (refresh покрытия, unenriched-выборка, агрегаты сверки), отчетных выборок `Query` (фильтр `merchant_id` и порядок отчета не совпадают с ключом сортировки фактов, каждая страница - скан с сортировкой) и мутаций backfill не измерена на больших объемах | на целевом профиле (14.2) циклы и отчеты могут конкурировать с ingestion | замер в 14.2; при подтверждении - проекции/skip-index под фактические предикаты (`merchant_id`, порядок отчета), инкрементальное состояние unenriched-счетов, батч-мутации | open |
-| KI-reporting-12 | Воркеры словаря и сверки не координируются между репликами: дубли вызовов Ledger и мутаций, курсор сверки в памяти | при N инстансах лишняя нагрузка и рассинхрон обхода; корректность не страдает (идемпотентно) | single-writer (advisory lock) либо явная фиксация конвенции до масштабирования (0.6/14.2) | open |
-| KI-reporting-13 | gRPC `ReportingService.Query` без authN/mTLS, и пустой `merchant_id` для списков означает всех мерчантов (внутренний вызов по FR-2) | при доступе к порту 9110 любой вызывающий читает события всех мерчантов в обход BFF; в dev порт опубликован только на loopback (127.0.0.1) | mTLS/авторизация и обязательный субъект вызова - 0.6 (по образцу KI-ledger-02); порт не публиковать вне доверенной зоны; прод запрещен до 0.6; серверный timeout-интерцептор - 0.6/14.7 | open |
+| KI-reporting-01 | CI and pre-commit are not configured | linters run manually | task 0.2 | open |
+| KI-reporting-02 | The stand ClickHouse runs with `CLICKHOUSE_DO_NOT_CHOWN=1` and a root process (the wire schema mounted ro) | a dev convention; prod privileges and the migration user are not separated | privilege separation, a read-only profile, TLS - 0.6/14.7 | open |
+| KI-reporting-03 | There is no load profile (no HTTP load before 11.4) | pipeline throughput is not measured | 14.2 (Kafka -> ClickHouse), Query profile - 11.4 | open |
+| KI-reporting-04 | Analytical query quotas and limits are not set; `/metrics` has service counters only (no Prometheus client) | a heavy `Query` period (a turnover aggregate over the whole history) may affect ingestion; no consumer lag or latency | `Query` is bounded by the 100-row limit and keyset pagination; readonly/max_memory_usage/max_execution_time - 14.7; the full metrics set - 0.7 | open |
+| KI-reporting-05 | `dim_accounts` is not populated instantly: rows between refresh and backfill cycles temporarily contain empty `account_type`/`merchant_id` (until the first cycle on a new stand) | the 11.4 merchant filter does not cover intermediate rows until the cycles converge | CLOSED 16.10.2026: the vocabulary, input enrichment and backfill are implemented (11.3); convergence is a target property, row freshness follows the env intervals | closed |
+| KI-reporting-06 | The wire schema and the format_schema config are duplicated in the umbrella `deploy/clickhouse` (for infrastructure startup without cloning the services) | diverging copies will break decoding on the shared stand | sync is checked by `scripts/check-clickhouse.ps1` (SHA256); when the schema moves to a string source - remove the copies | open |
+| KI-reporting-07 | The Kafka integration test uses a fixed free host port (a TOCTOU window under parallel CI) | a rare flake when racing for the port | dynamic forwarding after startup or port coordination - when CI stabilizes (0.2) | open |
+| KI-reporting-08 | The gRPC channel to the Ledger is plaintext, the client does not request TLS/authN | spoofing the Ledger address on the stand network yields a false vocabulary and reconciliation; false discrepancies | mTLS/authorization of inter-service calls - 0.6 (KI-ledger-02); do not publish the Ledger port outside the trusted zone; prod is forbidden before 0.6 | open |
+| KI-reporting-09 | Backfill runs mutations every cycle over accounts with an empty `account_type`; with a large lagging volume the mutation queue grows | part rewrites compete with ingestion for resources | the `BACKFILL_LIMIT` cap; if systematic - batches/schedule (14.2/14.7); `WHERE account_type = ''` does not touch enriched rows | open |
+| KI-reporting-10 | Merchants with a dirty `merchant_id` in the facts (outside the account plan) are logged WARN every cycle; merchants with impossible coverage (inconsistent stand data) are re-requested from the Ledger every cycle (the `DIM_MERCHANTS_LIMIT` budget with rotation - the tail does not starve, but the calls repeat) | log noise under permanently dirty data; extra Ledger calls | warning deduplication and a "quarantine" of uncoverable merchants after k attempts (if confirmed); the source service fixes the data | open |
+| KI-reporting-11 | The cost of periodic FINAL scans of the facts (coverage refresh, the unenriched select, reconciliation aggregates), of the `Query` report selects (the `merchant_id` filter and the report order do not match the fact sorting key, so each page is a scan with sorting) and of backfill mutations is not measured at large volumes | on the target profile (14.2) cycles and reports may compete with ingestion | measurement in 14.2; if confirmed - projections/skip indexes for the actual predicates (`merchant_id`, report order), incremental state of unenriched accounts, batch mutations | open |
+| KI-reporting-12 | The vocabulary and reconciliation workers do not coordinate between replicas: duplicate Ledger calls and mutations, the reconciliation cursor is in memory | with N instances there is extra load and a desynchronized walk; correctness does not suffer (idempotent) | single-writer (advisory lock) or an explicit convention fixed before scaling (0.6/14.2) | open |
+| KI-reporting-13 | gRPC `ReportingService.Query` has no authN/mTLS, and an empty `merchant_id` for lists means all merchants (an internal call per FR-2) | with access to port 9110 any caller reads events of all merchants bypassing the BFF; in dev the port is published to loopback only (127.0.0.1) | mTLS/authorization and a mandatory call subject - 0.6 (following KI-ledger-02); do not publish the port outside the trusted zone; prod is forbidden before 0.6; the server timeout interceptor - 0.6/14.7 | open |
 
-## 10. Журнал задач
+## 10. Task journal
 
-| CBL | Дата | Статус | Спека | Коммит |
+| CBL | Date | Status | Spec | Commit |
 | :-- | :-- | :-- | :-- | :-- |
-| CBL-11.2 | 2026-10-15 | done, ревью закрыто (конвейер ClickHouse: миграции fact_*, Kafka engine + MV по четырем топикам, wire-схема, реконсиляция по отпечатку с самовосстановлением, testcontainers и e2e; покрытие 88.2%) | `.specs/CBL-11.2-ingestion.md` | 8a0bd36 |
-| CBL-11.3 | 2026-10-16 | done (словарь dim_accounts: мерчантские счета из Ledger gRPC по покрытию фактов, системные деривацией по golden-векторам; обогащение на входе через JOIN MV; backfill истории; сверка с Ledger окном и round-robin; stub Ledger и e2e vocabulary.ps1; покрытие 82.7%) | `.specs/CBL-11.3-ledger-sync.md` | d977610 |
-| CBL-11.4 | 2026-10-16 | done (gRPC ReportingService.Query: закрытый каталог payments/payouts/ledger_entries/turnover, keyset-курсор с валидацией ключей, лимиты, канонические деньги; интеграционные тесты на ClickHouse и e2e reports.ps1 через grpcurl; покрытие 86.5%) | `.specs/CBL-11.4-reports-query.md` | этот коммит |
+| CBL-11.2 | 2026-10-15 | done, review closed (the ClickHouse pipeline: fact_* migrations, Kafka engine + MV over four topics, wire schema, fingerprint reconciliation with self-healing, testcontainers and e2e; coverage 88.2%) | `.specs/CBL-11.2-ingestion.md` | 8a0bd36 |
+| CBL-11.3 | 2026-10-16 | done (the dim_accounts vocabulary: merchant accounts from Ledger gRPC by fact coverage, system accounts by golden-vector derivation; input enrichment via JOIN in the MV; history backfill; Ledger reconciliation with a window and round-robin; the Ledger stub and e2e (the vocabulary scenario; with CBL-16.2 - E2E.md); coverage 82.7%) | `.specs/CBL-11.3-ledger-sync.md` | d977610 |
+| CBL-11.4 | 2026-10-16 | done (gRPC ReportingService.Query: the closed payments/payouts/ledger_entries/turnover catalog, a keyset cursor with key validation, limits, canonical money; integration tests on ClickHouse and e2e via grpcurl (with CBL-16.2 - E2E.md); coverage 86.5%) | `.specs/CBL-11.4-reports-query.md` | 49a9480 |
+| CBL-16.2 | 2026-10-16 | done (English comments and documentation across the repository: code, tests, configs, specs (11.2-11.4 translated), AGENTS.md, README; e2e runs via `test/e2e/E2E.md` with utilities in `.additionals/` and artifacts in `.runs/`; validation run PASS; coverage unchanged 86.5%) | `.specs/CBL-16.2-conventions.md` | this commit |
 
 ## 11. Runbook
 
-Конвейер (11.2):
+Pipeline (11.2):
 
-1. Строки не появляются в `fact_*`: проверить `SELECT * FROM system.kafka_consumers` -
-   ошибки подключения/парсинга, число skipped; проверить `KAFKA_BROKERS` (внутренний
-   адрес для ClickHouse, не host-порт) и наличие топиков.
-2. Схема декодирования: ошибка `CANNOT_PARSE_PROTOBUF_SCHEMA` - проверить
-   `SCHEMA_PATH` (относительный путь) и монтирование `deploy/format_schemas` в
-   `format_schema_path`, файл конфигурации `10-format-schema-path.xml`.
-3. Смена брокеров Kafka: перезапустить сервис - реконсиляция пересоздаст Kafka-таблицы и
-   MV (данные `fact_*` сохраняются); в логе будет `kafka pipeline configuration changed`.
-4. Битые сообщения: счетчик `kafka_skip_broken_messages`; найти сообщение по смещению в
-   логах ClickHouse; при массовости - остановить продюсера и разобрать контракт.
-5. Миграции: применяются при старте (`goose_db_version`); только вперед; изменение
-   колонок фактов - новой миграцией, существующие не править.
-6. Отставание: группы `cbl-reporting-*`; лаг в `system.kafka_consumers`; при необходимости
-   увеличить `kafka_num_consumers` или масштабировать сервис (14.7).
-7. Полная перезагрузка стенда: `make down` (уничтожает volume `ch-data` сервиса), затем
-   `make up` - миграции и конвейер поднимутся с нуля.
-8. Дрейф конвейера: сервис пересоздает пару при несовпадении отпечатка в `COMMENT`
-   (лог `kafka pipeline configuration changed`); удаленный MV восстанавливается без
-   пересоздания таблицы (`materialized view is missing, recreating`).
-9. Инфраструктурный стенд (без клона сервисов): копии wire-схемы и конфига в
-   `deploy/clickhouse` зонтичного репозитория; при правке схемы обновить копии и
-   прогнать `scripts/check-clickhouse.ps1` (проверяет SHA256, KI-reporting-06).
+1. Rows do not appear in `fact_*`: check `SELECT * FROM system.kafka_consumers` -
+   connection/parsing errors, the skipped count; check `KAFKA_BROKERS` (the internal
+   address for ClickHouse, not the host port) and that the topics exist.
+2. Decoding schema: the `CANNOT_PARSE_PROTOBUF_SCHEMA` error - check
+   `SCHEMA_PATH` (a relative path) and the mounting of `deploy/format_schemas` into
+   `format_schema_path`, the `10-format-schema-path.xml` configuration file.
+3. Kafka broker change: restart the service - reconciliation recreates the Kafka tables and
+   MVs (`fact_*` data is preserved); the log will show `kafka pipeline configuration changed`.
+4. Broken messages: the `kafka_skip_broken_messages` counter; find the message by offset in
+   the ClickHouse logs; if widespread - stop the producer and review the contract.
+5. Migrations: applied at startup (`goose_db_version`); forward only; change
+   fact columns with a new migration, never edit existing ones.
+6. Lag: the `cbl-reporting-*` groups; lag in `system.kafka_consumers`; if necessary,
+   increase `kafka_num_consumers` or scale the service (14.7).
+7. Full stand reload: `make down` (destroys the service `ch-data` volume), then
+   `make up` - migrations and the pipeline come up from scratch.
+8. Pipeline drift: the service recreates the pair when the fingerprint in `COMMENT` does
+   not match (the `kafka pipeline configuration changed` log); a deleted MV is restored
+   without recreating the table (`materialized view is missing, recreating`).
+9. Infrastructure stand (without cloning the services): copies of the wire schema and
+   config in `deploy/clickhouse` of the umbrella repository; when editing the schema,
+   update the copies and run `scripts/check-clickhouse.ps1` (checks SHA256, KI-reporting-06).
 
-Словарь и сверка (11.3):
+Vocabulary and reconciliation (11.3):
 
-1. Словарь не пополняется: логи `vocabulary cycle failed` (Ledger недоступен, проверьте
-   `LEDGER_GRPC_ADDR`), либо пустой ответ `ListMerchantAccounts` при отсутствии счетов;
-   счетчики `reporting_vocabulary_*` на `/metrics`.
-2. Строки фактов леджера с пустым `account_type` дольше нескольких циклов: счет вне
-   плана словаря (legacy) либо отставание мутаций; проверить
+1. The vocabulary is not populated: the `vocabulary cycle failed` logs (the Ledger is
+   unavailable, check `LEDGER_GRPC_ADDR`), or an empty `ListMerchantAccounts` response
+   when there are no accounts; the `reporting_vocabulary_*` counters on `/metrics`.
+2. Ledger fact rows with an empty `account_type` for more than a few cycles: the account is
+   outside the vocabulary plan (legacy) or mutations lag; check
    `SELECT count() FROM system.mutations WHERE is_done = 0` (KI-reporting-09/11).
-3. Расхождения сверки `missing_in_reporting`: сверить окно (`LEDGER_CHECK_WINDOW`),
-   лаг конвейера и отставание; единичные ранние missing у границы окна - задержка
-   событий, систематические - разбор `system.kafka_consumers` и DLQ-политики (T-RPT-04).
-4. Ошибки сверки по счету: WARN `ledger check account failed` в логах (таймаут Ledger,
-   превышение страниц - `truncated`); счетчики `reporting_ledger_check_*` на `/metrics`.
-   При полном сбое порции (Ledger недоступен) курсор не двигается - цикл повторит ту же
-   порцию после восстановления; это видно по росту `errors` при неизменном обходе.
-5. Пересоздание словаря с нуля: `TRUNCATE TABLE reporting.dim_accounts` затем цикл
-   refresh; backfill повторно обогатит историю (идемпотентно).
-6. Новый актив или payout-счет мерчанта появляется с задержкой до одного цикла refresh:
-   требуемое покрытие из фактов (платежи - merchant, выплаты - payout) запускает
-   пересинхронизацию мерчанта; до этого строки остаются без значений и дозаполняются
-   backfill-ом.
+3. `missing_in_reporting` reconciliation discrepancies: verify the window
+   (`LEDGER_CHECK_WINDOW`), the pipeline lag and backlog; isolated early missing at the
+   window edge is event delay, systematic missing calls for a review of
+   `system.kafka_consumers` and the DLQ policy (T-RPT-04).
+4. Per-account reconciliation errors: WARN `ledger check account failed` in the logs (a
+   Ledger timeout, page overrun - `truncated`); the `reporting_ledger_check_*` counters on
+   `/metrics`. On a complete batch failure (the Ledger is unavailable) the cursor does not
+   move - the cycle repeats the same batch after recovery; this is visible as growing
+   `errors` with an unchanged walk.
+5. Recreating the vocabulary from scratch: `TRUNCATE TABLE reporting.dim_accounts` then a
+   refresh cycle; backfill re-enriches the history (idempotently).
+6. A new asset or merchant payout account appears with a delay of up to one refresh cycle:
+   the required coverage from the facts (payments - merchant, payouts - payout) triggers
+   merchant resynchronization; until then rows remain without values and are filled in by
+   backfill.
 
-Отчеты Query (11.4):
+Query reports (11.4):
 
-1. `NotFound` (404 у прокси): тип отчета вне каталога - `payments`, `payouts`,
-   `ledger_entries`, `turnover`; имя проверяется по форме `[a-z0-9_]{1,64}`.
-2. `InvalidArgument` (400 у прокси): лимит 1 - 100, период (`period_to >= period_from`),
-   `group_by` из whitelist типа (`turnover`: `asset`, `day_asset`), курсор - не длиннее
-   512 символов и валидируется по форме (версия, отчет, форматы ключей); структурно
-   корректный подделанный курсор не дает доступа к чужим данным (фильтр мерчанта
-   применяется, значения биндятся) и лишь сдвигает позицию своего отчета.
-3. `turnover` без `merchant_id` - ошибка (отчет мерчанта); в `ledger_entries` строки
-   без словарной записи мерчантскому фильтру не видны (сходимость словаря - выше).
-4. Тяжелый период (агрегат по всей истории): сузить окно; квоты и readonly-профиль -
-   14.7; внутренние ошибки - ERROR `report query failed` в логах (детали не уходят
-   клиенту), деградация канала - KI-reporting-13.
+1. `NotFound` (404 at the proxy): the report type is outside the catalog - `payments`,
+   `payouts`, `ledger_entries`, `turnover`; the name is checked against the
+   `[a-z0-9_]{1,64}` shape.
+2. `InvalidArgument` (400 at the proxy): limit 1 - 100, period (`period_to >= period_from`),
+   `group_by` from the type whitelist (`turnover`: `asset`, `day_asset`), the cursor is at
+   most 512 characters and is validated by shape (version, report, key formats); a
+   structurally valid forged cursor grants no access to other merchants' data (the
+   merchant filter is applied, values are bound) and only shifts the position within its
+   own report.
+3. `turnover` without `merchant_id` is an error (a merchant report); in `ledger_entries`
+   rows without a vocabulary record are invisible to the merchant filter (vocabulary
+   convergence - above).
+4. A heavy period (an aggregate over the whole history): narrow the window; quotas and the
+   readonly profile - 14.7; internal errors - ERROR `report query failed` in the logs
+   (details never reach the client), channel degradation - KI-reporting-13.

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestCountersHandler проверяет текстовый Prometheus-формат счетчиков.
+// TestCountersHandler verifies the text Prometheus format of the counters.
 func TestCountersHandler(t *testing.T) {
 	counters := &Counters{}
 	counters.VocabularyAccounts.Add(2)
@@ -32,20 +32,20 @@ func TestCountersHandler(t *testing.T) {
 	} {
 		assert.Contains(t, body, fragment)
 	}
-	// Формат Prometheus: имя в # TYPE - без меток, семейство объявляется один раз.
+	// Prometheus format: the name in # TYPE carries no labels, the family is declared once.
 	typeLines := 0
 	for _, line := range strings.Split(body, "\n") {
 		if strings.HasPrefix(line, "# TYPE reporting_ledger_check_discrepancies_total ") {
 			typeLines++
 		}
 		if strings.HasPrefix(line, "# TYPE") {
-			assert.NotContains(t, line, "{", "метки недопустимы в строке TYPE")
+			assert.NotContains(t, line, "{", "labels are not allowed in a TYPE line")
 		}
 	}
-	assert.Equal(t, 1, typeLines, "семейство расхождений объявляется один раз")
+	assert.Equal(t, 1, typeLines, "the discrepancy family is declared once")
 }
 
-// TestCountersZero проверяет нулевой снимок без обращений.
+// TestCountersZero verifies the zero snapshot without accesses.
 func TestCountersZero(t *testing.T) {
 	counters := &Counters{}
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)

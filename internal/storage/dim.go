@@ -10,58 +10,58 @@ import (
 	"github.com/cbl/cbl-reporting/internal/domain"
 )
 
-// timeLayout задает формат литерала времени ClickHouse для сверки.
+// timeLayout defines the ClickHouse time literal format for reconciliation.
 const timeLayout = "2006-01-02 15:04:05.000"
 
-// DimAccount описывает строку словаря reporting.dim_accounts.
+// DimAccount describes a row of the reporting.dim_accounts dictionary.
 type DimAccount struct {
-	// AccountID задает идентификатор счета.
+	// AccountID defines the account identifier.
 	AccountID string
-	// AccountType задает тип счета плана счетов.
+	// AccountType defines the account type of the chart of accounts.
 	AccountType string
-	// MerchantID задает бизнес-ссылку мерчанта (пусто у системных счетов).
+	// MerchantID defines the merchant business reference (empty for platform accounts).
 	MerchantID string
-	// Asset задает код актива счета.
+	// Asset defines the account asset code.
 	Asset string
-	// Decimals задает шкалу актива счета.
+	// Decimals defines the account asset scale.
 	Decimals uint8
 }
 
-// AssetPair описывает пару (актив, шкала) из фактов леджера.
+// AssetPair describes an (asset, scale) pair from ledger facts.
 type AssetPair struct {
-	// Asset задает код актива.
+	// Asset defines the asset code.
 	Asset string
-	// Decimals задает шкалу актива.
+	// Decimals defines the asset scale.
 	Decimals uint8
 }
 
-// MerchantPair описывает требуемое покрытие словаря из фактов: платежи
-// требуют счет `merchant`, выплаты - `payout` по паре (актив, шкала).
+// MerchantPair describes the required dictionary coverage from facts: payments
+// require the `merchant` account, payouts - `payout`, per (asset, scale) pair.
 type MerchantPair struct {
-	// MerchantID задает бизнес-ссылку мерчанта.
+	// MerchantID defines the merchant business reference.
 	MerchantID string
-	// Asset задает код актива.
+	// Asset defines the asset code.
 	Asset string
-	// Decimals задает шкалу актива.
+	// Decimals defines the asset scale.
 	Decimals uint8
-	// AccountType задает тип требуемой словарной строки.
+	// AccountType defines the type of the required dictionary row.
 	AccountType string
 }
 
-// TxAggregate описывает агрегат проводок по транзакции (одна сторона сверки).
+// TxAggregate describes an aggregate of entries per transaction (one side of reconciliation).
 type TxAggregate struct {
-	// Count задает число проводок.
+	// Count defines the number of entries.
 	Count int64
-	// Debit задает сумму проводок дебета в минимальных единицах.
+	// Debit defines the total debit entries in minor units.
 	Debit int64
-	// Credit задает сумму проводок кредита в минимальных единицах.
+	// Credit defines the total credit entries in minor units.
 	Credit int64
 }
 
-// FactMerchantPairs возвращает требуемое покрытие словаря по мерчантам из
-// фактов (FINAL): платежи - счет merchant, выплаты - счет payout. Пара без
-// строки словаря означает, что мерчанта нужно (пере)синхронизировать с Ledger
-// (ловит и новые активы известных мерчантов).
+// FactMerchantPairs returns the required dictionary coverage by merchants from
+// facts (FINAL): payments - the merchant account, payouts - the payout account.
+// A pair without a dictionary row means the merchant must be (re)synchronized
+// with Ledger (this also catches new assets of known merchants).
 func FactMerchantPairs(ctx context.Context, db *sql.DB) ([]MerchantPair, error) {
 	rows, err := db.QueryContext(ctx, `SELECT DISTINCT merchant_id, asset, decimals, 'merchant' AS account_type
 FROM reporting.fact_payment_events FINAL WHERE merchant_id != '' AND asset != ''
@@ -83,8 +83,8 @@ FROM reporting.fact_payouts FINAL WHERE merchant_id != '' AND asset != ''`)
 	return pairs, rows.Err()
 }
 
-// DimPairCoverage возвращает покрытие словаря по парам (мерчант, актив, шкала,
-// тип) для сверки с требуемым покрытием фактов.
+// DimPairCoverage returns the dictionary coverage by (merchant, asset, scale,
+// type) pairs for comparison with the required coverage from facts.
 func DimPairCoverage(ctx context.Context, db *sql.DB) (map[MerchantPair]struct{}, error) {
 	rows, err := db.QueryContext(ctx, `SELECT DISTINCT merchant_id, asset, decimals, account_type
 FROM reporting.dim_accounts FINAL
@@ -104,8 +104,8 @@ WHERE account_type IN ('merchant', 'payout') AND merchant_id != ''`)
 	return coverage, rows.Err()
 }
 
-// FactAssetPairs возвращает различные пары (asset, decimals) из фактов леджера
-// (FINAL) - кандидаты деривации системных счетов.
+// FactAssetPairs returns the distinct (asset, decimals) pairs from ledger facts
+// (FINAL) - candidates for platform account derivation.
 func FactAssetPairs(ctx context.Context, db *sql.DB) ([]AssetPair, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT DISTINCT asset, decimals FROM reporting.fact_ledger_entries FINAL WHERE asset != '' ORDER BY asset, decimals`)
@@ -124,8 +124,8 @@ func FactAssetPairs(ctx context.Context, db *sql.DB) ([]AssetPair, error) {
 	return pairs, rows.Err()
 }
 
-// DimExistingIDs возвращает подмножество идентификаторов, присутствующих в
-// словаре (FINAL).
+// DimExistingIDs returns the subset of identifiers that are present in the
+// dictionary (FINAL).
 func DimExistingIDs(ctx context.Context, db *sql.DB, accountIDs []string) (map[string]struct{}, error) {
 	existing := make(map[string]struct{})
 	if len(accountIDs) == 0 {
@@ -135,7 +135,7 @@ func DimExistingIDs(ctx context.Context, db *sql.DB, accountIDs []string) (map[s
 	for _, id := range accountIDs {
 		args = append(args, id)
 	}
-	//nolint:gosec // в строку подставляются только плейсхолдеры, значения в аргументах
+	//nolint:gosec // only placeholders are interpolated into the string, values stay in arguments
 	query := `SELECT account_id FROM reporting.dim_accounts FINAL WHERE account_id IN (` +
 		strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + `)`
 	rows, err := db.QueryContext(ctx, query, args...)
@@ -153,7 +153,7 @@ func DimExistingIDs(ctx context.Context, db *sql.DB, accountIDs []string) (map[s
 	return existing, rows.Err()
 }
 
-// DimAccountsByIDs возвращает строки словаря по идентификаторам (FINAL).
+// DimAccountsByIDs returns dictionary rows by identifiers (FINAL).
 func DimAccountsByIDs(ctx context.Context, db *sql.DB, accountIDs []string) (map[string]DimAccount, error) {
 	accounts := make(map[string]DimAccount)
 	if len(accountIDs) == 0 {
@@ -163,7 +163,7 @@ func DimAccountsByIDs(ctx context.Context, db *sql.DB, accountIDs []string) (map
 	for _, id := range accountIDs {
 		args = append(args, id)
 	}
-	//nolint:gosec // в строку подставляются только плейсхолдеры, значения в аргументах
+	//nolint:gosec // only placeholders are interpolated into the string, values stay in arguments
 	query := `SELECT account_id, account_type, merchant_id, asset, decimals
 FROM reporting.dim_accounts FINAL WHERE account_id IN (` +
 		strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + `)`
@@ -182,8 +182,8 @@ FROM reporting.dim_accounts FINAL WHERE account_id IN (` +
 	return accounts, rows.Err()
 }
 
-// DimAccountPage возвращает страницу идентификаторов словаря после курсора
-// (round-robin обхода сверки).
+// DimAccountPage returns a page of dictionary identifiers after the cursor
+// (round-robin reconciliation walk).
 func DimAccountPage(ctx context.Context, db *sql.DB, after string, limit int) ([]string, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT account_id FROM reporting.dim_accounts FINAL
@@ -203,9 +203,10 @@ WHERE account_id != '' AND account_id > ? ORDER BY account_id LIMIT ?`, after, l
 	return ids, rows.Err()
 }
 
-// InsertDimAccounts вставляет строки словаря батчами (значения валидированы
-// вызывающим: тип счета из плана, ссылка мерчанта и актив по правилам; биндинг
-// параметров - штатный механизм драйвера; батч ограничивает число партов).
+// InsertDimAccounts inserts dictionary rows in batches (values are validated
+// by the caller: the account type is from the chart of accounts, the merchant
+// reference and the asset follow the rules; parameter binding is the driver
+// mechanism; the batch limits the number of parts).
 func InsertDimAccounts(ctx context.Context, db *sql.DB, accounts []DimAccount) error {
 	const batchSize = 200
 	for start := 0; start < len(accounts); start += batchSize {
@@ -217,7 +218,7 @@ func InsertDimAccounts(ctx context.Context, db *sql.DB, accounts []DimAccount) e
 			placeholders = append(placeholders, "(?, ?, ?, ?, ?, now64(3))")
 			args = append(args, account.AccountID, account.AccountType, account.MerchantID, account.Asset, account.Decimals)
 		}
-		//nolint:gosec // в строку подставляются только плейсхолдеры, значения в аргументах
+		//nolint:gosec // only placeholders are interpolated into the string, values stay in arguments
 		query := `INSERT INTO reporting.dim_accounts
 (account_id, account_type, merchant_id, asset, decimals, updated_at) VALUES ` + strings.Join(placeholders, ",")
 		if _, err := db.ExecContext(ctx, query, args...); err != nil {
@@ -227,9 +228,10 @@ func InsertDimAccounts(ctx context.Context, db *sql.DB, accounts []DimAccount) e
 	return nil
 }
 
-// FactUnenrichedAccounts возвращает счета словаря с пустым account_type в
-// фактах леджера (FINAL, детерминированный порядок, лимит на цикл): счета вне
-// словаря не выбираются, поэтому бюджет цикла не голодает на legacy-строках.
+// FactUnenrichedAccounts returns dictionary accounts with an empty
+// account_type in the ledger facts (FINAL, deterministic order, per-cycle
+// limit): accounts outside the dictionary are not selected, so the cycle
+// budget is not starved by legacy rows.
 func FactUnenrichedAccounts(ctx context.Context, db *sql.DB, limit int) ([]string, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT DISTINCT account_id FROM reporting.fact_ledger_entries FINAL
@@ -250,9 +252,9 @@ ORDER BY account_id LIMIT ?`, limit)
 	return ids, rows.Err()
 }
 
-// BackfillAccount обогащает исторические строки фактов леджера значениями
-// словаря (мутация по узкому предикату, идемпотентна и сходится; параметры
-// биндятся драйвером).
+// BackfillAccount enriches historical ledger fact rows with dictionary values
+// (a mutation by a narrow predicate, idempotent and convergent; parameters
+// are bound by the driver).
 func BackfillAccount(ctx context.Context, db *sql.DB, account DimAccount) error {
 	if !domain.ValidAccountType(account.AccountType) {
 		return fmt.Errorf("unknown account type %q in dim", account.AccountType)
@@ -264,8 +266,8 @@ func BackfillAccount(ctx context.Context, db *sql.DB, account DimAccount) error 
 	if !personal && account.MerchantID != "" {
 		return fmt.Errorf("platform account %s must not carry merchant id", account.AccountType)
 	}
-	// Значение account_type = '' в предикате гарантирует сходимость: уже
-	// обогащенные строки повторно не переписываются.
+	// The account_type = '' value in the predicate guarantees convergence:
+	// already enriched rows are not rewritten again.
 	_, err := db.ExecContext(ctx, `ALTER TABLE reporting.fact_ledger_entries
 UPDATE account_type = ?, merchant_id = ?
 WHERE account_id = ? AND account_type = ''`,
@@ -276,8 +278,8 @@ WHERE account_id = ? AND account_type = ''`,
 	return nil
 }
 
-// FactsAggregate агрегирует проводки фактов по транзакциям за окно
-// [from, to) для сверки с Ledger.
+// FactsAggregate aggregates fact entries by transaction over the window
+// [from, to) for reconciliation with Ledger.
 func FactsAggregate(ctx context.Context, db *sql.DB, accountID string, from, to time.Time) (map[string]TxAggregate, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT transaction_id, count() AS cnt,

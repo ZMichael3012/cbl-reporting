@@ -10,7 +10,7 @@ import (
 	"github.com/cbl/cbl-reporting/internal/storage"
 )
 
-// newTestDB открывает подключение без соединения (dsn не резолвится до запроса).
+// newTestDB opens a connection without connecting (the dsn is not resolved until a query).
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := storage.Open("clickhouse://cbl:cbl@127.0.0.1:1/reporting")
@@ -19,8 +19,8 @@ func newTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// TestOpenInvalidDSN проверяет отказ на битом DSN и санитизацию сообщения
-// (пароль не попадает в ошибку и логи).
+// TestOpenInvalidDSN checks rejection of a broken DSN and sanitization of the
+// message (the password does not reach the error and logs).
 func TestOpenInvalidDSN(t *testing.T) {
 	_, err := storage.Open("://missing-scheme")
 	require.Error(t, err)
@@ -28,24 +28,24 @@ func TestOpenInvalidDSN(t *testing.T) {
 
 	_, err = storage.Open("clickhouse://cbl:supersecret@host:notaport/reporting")
 	require.Error(t, err)
-	require.NotContains(t, err.Error(), "supersecret", "пароль не эхоится")
+	require.NotContains(t, err.Error(), "supersecret", "the password is not echoed")
 }
 
-// TestReadyUnavailable проверяет отказ готовности при недоступном хранилище.
+// TestReadyUnavailable checks readiness failure when the storage is unavailable.
 func TestReadyUnavailable(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.Close())
 	require.Error(t, storage.Ready(t.Context(), db))
 }
 
-// TestPingClosedDB проверяет ошибку доступности (readyz при сбое).
+// TestPingClosedDB checks the availability error (readyz on failure).
 func TestPingClosedDB(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.Close())
 	require.Error(t, storage.Ping(t.Context(), db))
 }
 
-// TestMigrateInvalidDir проверяет обертку ошибки миграций.
+// TestMigrateInvalidDir checks the migration error wrapper.
 func TestMigrateInvalidDir(t *testing.T) {
 	db := newTestDB(t)
 	err := storage.Migrate(t.Context(), db, "missing-migrations-dir")
@@ -53,7 +53,7 @@ func TestMigrateInvalidDir(t *testing.T) {
 	require.Contains(t, err.Error(), "goose")
 }
 
-// TestReconcileUnavailableDB проверяет обертку ошибки чтения состояния.
+// TestReconcileUnavailableDB checks the state read error wrapper.
 func TestReconcileUnavailableDB(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.Close())
@@ -64,39 +64,41 @@ func TestReconcileUnavailableDB(t *testing.T) {
 	require.Contains(t, err.Error(), "read table state")
 }
 
-// TestNewPipelineValidation проверяет fail-fast проверку конфигурации
-// (значения подставляются в DDL, инъекция через окружение исключена).
+// TestNewPipelineValidation checks the fail-fast configuration validation
+// (values are interpolated into the DDL, injection via the environment is
+// excluded).
 func TestNewPipelineValidation(t *testing.T) {
 	db := newTestDB(t)
 	_, err := storage.NewPipeline(db, "kafka:9092; DROP TABLE x", "events.proto", nil)
-	require.Error(t, err, "недопустимые брокеры отклоняются")
+	require.Error(t, err, "unexpected brokers are rejected")
 	_, err = storage.NewPipeline(db, "kafka:9092,", "events.proto", nil)
-	require.Error(t, err, "висячая запятая в брокерах отклоняется")
+	require.Error(t, err, "a trailing comma in brokers is rejected")
 	_, err = storage.NewPipeline(db, "kafka:9092", "'; DROP TABLE x --", nil)
-	require.Error(t, err, "недопустимый путь схемы отклоняется")
+	require.Error(t, err, "an unexpected schema path is rejected")
 	_, err = storage.NewPipeline(db, "kafka:9092", "../secrets.proto", nil)
-	require.Error(t, err, "переход вверх по пути схемы отклоняется")
+	require.Error(t, err, "upward traversal in the schema path is rejected")
 	_, err = storage.NewPipeline(db, "kafka:9092", "", nil)
-	require.Error(t, err, "пустой путь схемы отклоняется")
+	require.Error(t, err, "an empty schema path is rejected")
 	_, err = storage.NewPipeline(nil, "kafka:9092", "events.proto", nil)
-	require.Error(t, err, "без подключения сборка невозможна")
+	require.Error(t, err, "the pipeline cannot be assembled without a connection")
 	pipeline, err := storage.NewPipeline(db, "kafka:9092,kafka2:9092", "events.proto", nil)
 	require.NoError(t, err)
 	require.NotNil(t, pipeline)
 }
 
-// TestBuildKafkaTableDDLComment проверяет отпечаток конфигурации в COMMENT:
-// смена брокеров или схемы меняет отпечаток (пересоздание пары).
+// TestBuildKafkaTableDDLComment checks the configuration fingerprint in
+// COMMENT: a change of brokers or schema changes the fingerprint (pair
+// recreation).
 func TestBuildKafkaTableDDLComment(t *testing.T) {
 	spec := storage.DefaultSpecs()[0]
 	first := storage.BuildKafkaTableDDL(spec, "kafka:9092", "events.proto", "cbl-pipeline:aaaa")
 	assert.Contains(t, first, "COMMENT 'cbl-pipeline:aaaa'")
 	second := storage.BuildKafkaTableDDL(spec, "kafka:2909", "events.proto", "cbl-pipeline:bbbb")
-	assert.NotEqual(t, first, second, "сокращение списка брокеров меняет DDL")
+	assert.NotEqual(t, first, second, "shrinking the broker list changes the DDL")
 	assert.NotContains(t, storage.BuildKafkaTableDDL(spec, "kafka:9092", "events.proto", ""), "COMMENT")
 }
 
-// TestDefaultSpecs проверяет состав конвейеров: четыре топика и пары таблиц.
+// TestDefaultSpecs checks the composition of the pipelines: four topics and table pairs.
 func TestDefaultSpecs(t *testing.T) {
 	specs := storage.DefaultSpecs()
 	require.Len(t, specs, 4)
@@ -114,7 +116,7 @@ func TestDefaultSpecs(t *testing.T) {
 	}, topics)
 }
 
-// TestBuildKafkaTableDDL проверяет состав DDL Kafka-таблицы.
+// TestBuildKafkaTableDDL checks the composition of the Kafka table DDL.
 func TestBuildKafkaTableDDL(t *testing.T) {
 	spec := storage.DefaultSpecs()[0]
 	ddl := storage.BuildKafkaTableDDL(spec, "kafka:9092", "events.proto", "")
@@ -135,7 +137,7 @@ func TestBuildKafkaTableDDL(t *testing.T) {
 	}
 }
 
-// TestBuildViewDDL проверяет фильтры и маппинг materialized view.
+// TestBuildViewDDL checks the filters and the materialized view mapping.
 func TestBuildViewDDL(t *testing.T) {
 	var ledgerView, alertsView, paymentView, payoutView string
 	for _, spec := range storage.DefaultSpecs() {
@@ -158,8 +160,8 @@ func TestBuildViewDDL(t *testing.T) {
 		"transaction_id != ''",
 		"tupleElement(entry.3, 3) <= 18",
 		"CAST(if(entry.2 = 1, 'debit', 'credit') AS Enum8('debit' = 1, 'credit' = 2))",
-		// Словарь обогащает новые строки на входе; FINAL исключает размножение
-		// строк на несхлопнутых дублях словаря (CBL-11.3).
+		// The dictionary enriches new rows on ingestion; FINAL prevents row
+		// multiplication on unmerged dictionary duplicates (CBL-11.3).
 		"LEFT JOIN (SELECT account_id, account_type, merchant_id FROM reporting.dim_accounts FINAL) AS dim",
 		"dim.account_type AS account_type, dim.merchant_id AS merchant_id",
 		"ON flat.account_id = dim.account_id",
@@ -174,8 +176,8 @@ func TestBuildViewDDL(t *testing.T) {
 	} {
 		assert.Contains(t, alertsView, fragment)
 	}
-	// Подзапрос переименовывает кортежи: алиас, совпадающий с именем колонки,
-	// перекрывает ее для остальных выражений SELECT (проверено на ClickHouse).
+	// The subquery renames the tuples: an alias matching a column name
+	// shadows it for the remaining SELECT expressions (verified on ClickHouse).
 	for _, fragment := range []string{
 		"(SELECT payment_id, merchant_id, quote_id, rate, txid, state_version, _headers,",
 		"expected_amount AS amount_tuple",

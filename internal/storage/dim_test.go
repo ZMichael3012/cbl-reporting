@@ -7,8 +7,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBackfillAccountValidation проверяет отказ на строках словаря вне плана
-// счетов до обращения к ClickHouse (db не используется на пути валидации).
+// TestBackfillAccountValidation checks rejection of dictionary rows outside
+// the chart of accounts before accessing ClickHouse (db is not used on the
+// validation path).
 func TestBackfillAccountValidation(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {

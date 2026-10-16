@@ -1,14 +1,15 @@
-// Wire-схема декодирования событий CBL для ClickHouse Kafka engine (CBL-11.2).
-// Схема - wire-совместимое уплощение контрактов billing/events/v1 и
-// billing/common/v1 из cbl-protos@cf-3.4: имена и пакеты для wire-формата не
-// важны, номера и типы полей сохранены; неиспользуемые поля опущены (декодер
-// пропускает неизвестные wire-поля, номера по правилам buf не переиспользуются).
-// Импорты не используются: ClickHouse не резолвит импорты между файлами схем, а
-// google.protobuf.Timestamp не мапится на DateTime64, поэтому Timestamp
-// декодируется как Tuple(seconds, nanos) и конвертируется в materialized view.
-// Файл монтируется в format_schema_path ClickHouse (compose сервиса и
-// testcontainers); SCHEMA_PATH задает путь относительно format_schema_path
-// (абсолютный путь Kafka engine запрещает).
+// Wire decoding schema of CBL events for the ClickHouse Kafka engine (CBL-11.2).
+// The schema is a wire-compatible flattening of the billing/events/v1 and
+// billing/common/v1 contracts from cbl-protos@cf-3.4: names and packages do not
+// matter for the wire format, field numbers and types are preserved; unused
+// fields are omitted (the decoder skips unknown wire fields, numbers are never
+// reused per buf rules).
+// Imports are not used: ClickHouse does not resolve imports between schema files,
+// and google.protobuf.Timestamp does not map to DateTime64, so Timestamp is
+// decoded as Tuple(seconds, nanos) and converted in the materialized view.
+// The file is mounted into the ClickHouse format_schema_path (service compose and
+// testcontainers); SCHEMA_PATH sets the path relative to format_schema_path
+// (the Kafka engine forbids an absolute path).
 syntax = "proto3";
 
 package cbl.reporting.schemas;

@@ -6,21 +6,21 @@ import (
 	"time"
 )
 
-// envMap возвращает функцию доступа к окружению из карты.
+// envMap returns an environment accessor function backed by a map.
 func envMap(values map[string]string) func(string) string {
 	return func(key string) string { return values[key] }
 }
 
-// baseEnv задает минимально валидное окружение.
+// baseEnv defines the minimally valid environment.
 func baseEnv() map[string]string {
-	return map[string]string{ //nolint:gosec // фикстура локального стенда, не секрет
+	return map[string]string{ //nolint:gosec // local stand fixture, not a secret
 		"CLICKHOUSE_DSN":   "clickhouse://cbl:cbl@clickhouse:9000/reporting",
 		"KAFKA_BROKERS":    "kafka:29092",
 		"LEDGER_GRPC_ADDR": "ledger:9040",
 	}
 }
 
-// TestLoadDefaults проверяет значения по умолчанию и совместимость с 11.2.
+// TestLoadDefaults verifies the default values and compatibility with 11.2.
 func TestLoadDefaults(t *testing.T) {
 	cfg, err := Load(envMap(baseEnv()))
 	if err != nil {
@@ -43,7 +43,7 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-// TestLoadRequired проверяет обязательные переменные.
+// TestLoadRequired verifies the required variables.
 func TestLoadRequired(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -67,7 +67,7 @@ func TestLoadRequired(t *testing.T) {
 	}
 }
 
-// TestLoadValues проверяет разбор и границы значений.
+// TestLoadValues verifies parsing and value bounds.
 func TestLoadValues(t *testing.T) {
 	env := baseEnv()
 	env["LEDGER_TIMEOUT"] = "2s"
@@ -97,7 +97,7 @@ func TestLoadValues(t *testing.T) {
 	}
 }
 
-// TestLoadInvalid проверяет отказ на невалидных значениях.
+// TestLoadInvalid verifies rejection of invalid values.
 func TestLoadInvalid(t *testing.T) {
 	cases := []struct {
 		key   string

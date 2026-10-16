@@ -10,9 +10,9 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
-// Open открывает подключение ClickHouse по DSN сервиса. Ошибка разбора DSN не
-// эхоит исходную строку: в ней может быть пароль (утечка в логи при опечатке
-// конфигурации).
+// Open opens a ClickHouse connection by the service DSN. A DSN parse error
+// does not echo the original string: it may contain a password (a leak to
+// logs on a configuration typo).
 func Open(dsn string) (*sql.DB, error) {
 	options, err := clickhouse.ParseDSN(dsn)
 	if err != nil {
@@ -25,7 +25,7 @@ func Open(dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Ping проверяет доступность ClickHouse (readyz).
+// Ping checks ClickHouse availability (readyz).
 func Ping(ctx context.Context, db *sql.DB) error {
 	if err := db.PingContext(ctx); err != nil {
 		return fmt.Errorf("clickhouse ping: %w", err)
@@ -33,8 +33,8 @@ func Ping(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// Ready проверяет готовность хранилища и конвейера: ClickHouse отвечает и все
-// четыре пары Kafka-таблица+materialized view на месте.
+// Ready checks the readiness of the storage and the pipeline: ClickHouse
+// responds and all four Kafka table + materialized view pairs are in place.
 func Ready(ctx context.Context, db *sql.DB) error {
 	if err := Ping(ctx, db); err != nil {
 		return err

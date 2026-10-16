@@ -24,8 +24,8 @@ import (
 	"github.com/cbl/cbl-reporting/test/ledgerstub"
 )
 
-// startClickHouse поднимает ClickHouse на реальном контейнере (без Kafka:
-// словарю и backfill достаточно хранилища).
+// startClickHouse starts ClickHouse on a real container (without Kafka:
+// the vocabulary and backfill need storage only).
 func startClickHouse(t *testing.T) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
@@ -65,13 +65,13 @@ func startClickHouse(t *testing.T) *sql.DB {
 	return db
 }
 
-// chQuote экранирует литерал тестовых INSERT-ов.
+// chQuote escapes literals of test INSERTs.
 func chQuote(value string) string {
 	return "'" + strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `'`, `\'`) + "'"
 }
 
-// insertLedgerFact вставляет строку факта проводки леджера со временем в
-// прошлом (словарь и backfill окном не ограничены).
+// insertLedgerFact inserts a ledger posting fact row with a time in the
+// past (the vocabulary and backfill are not limited by a window).
 func insertLedgerFact(t *testing.T, db *sql.DB, transactionID string, entryIndex int, accountID, accountType, merchantID string) {
 	t.Helper()
 	query := fmt.Sprintf(`INSERT INTO reporting.fact_ledger_entries
@@ -85,8 +85,8 @@ func insertLedgerFact(t *testing.T, db *sql.DB, transactionID string, entryIndex
 	require.NoError(t, err)
 }
 
-// insertPaymentFact вставляет строку факта платежа (источник требуемого
-// покрытия словаря по парам актив/шкала).
+// insertPaymentFact inserts a payment fact row (the source of the required
+// vocabulary coverage by asset/scale pairs).
 func insertPaymentFact(t *testing.T, db *sql.DB, paymentID, merchantID, asset string, decimals uint8) {
 	t.Helper()
 	query := fmt.Sprintf(`INSERT INTO reporting.fact_payment_events
@@ -99,9 +99,9 @@ func insertPaymentFact(t *testing.T, db *sql.DB, paymentID, merchantID, asset st
 	require.NoError(t, err)
 }
 
-// TestVocabularyCycleIntegration проверяет цикл словаря: наполнение
-// мерчантскими (Ledger gRPC) и системными (деривация) счетами, backfill
-// истории, идемпотентность и деградацию при недоступном Ledger.
+// TestVocabularyCycleIntegration checks the vocabulary cycle: filling with
+// merchant (Ledger gRPC) and system (derivation) accounts, history backfill,
+// idempotency and degradation with an unavailable Ledger.
 func TestVocabularyCycleIntegration(t *testing.T) {
 	ctx := context.Background()
 	db := startClickHouse(t)
@@ -112,7 +112,7 @@ func TestVocabularyCycleIntegration(t *testing.T) {
 		ledgerstub.Account{ID: "acc-merchant", Type: "merchant", Asset: "USDT", Decimals: 6},
 		ledgerstub.Account{ID: "acc-payout", Type: "payout", Asset: "USDT", Decimals: 6},
 	)
-	stub.SeedAccounts("m-zero") // мерчант без счетов: пустой ответ не ошибка
+	stub.SeedAccounts("m-zero") // a merchant without accounts: an empty response is not an error
 	addr, err := stub.Start("")
 	require.NoError(t, err)
 	t.Cleanup(stub.Stop)
@@ -124,7 +124,7 @@ func TestVocabularyCycleIntegration(t *testing.T) {
 	syncer, err := New(db, client, time.Minute, 100, 100, nil, counters)
 	require.NoError(t, err)
 
-	// История до словаря: счет мерчанта, счет вне плана и платеж-источник.
+	// History before the vocabulary: a merchant account, an out-of-plan account and a source payment.
 	transactionID := "tx-" + uuid.NewString()
 	insertLedgerFact(t, db, transactionID, 0, "acc-merchant", "", "")
 	insertLedgerFact(t, db, transactionID, 1, "acc-legacy", "", "")
@@ -133,10 +133,10 @@ func TestVocabularyCycleIntegration(t *testing.T) {
 
 	inserted, mutations, err := syncer.Cycle(ctx)
 	require.NoError(t, err)
-	// Словарь: два счета m-1 из Ledger плюс три системных для USDT/6;
-	// m-zero без счетов строк не создает.
+	// Vocabulary: two m-1 accounts from the Ledger plus three system ones for
+	// USDT/6; m-zero without accounts creates no rows.
 	assert.Equal(t, 5, inserted)
-	// Backfill: мутация только для acc-merchant (acc-legacy вне словаря).
+	// Backfill: a mutation only for acc-merchant (acc-legacy is outside the vocabulary).
 	assert.Equal(t, 1, mutations)
 	assert.Equal(t, int64(5), counters.VocabularyAccounts.Load())
 	assert.Equal(t, int64(1), counters.BackfillMutations.Load())
@@ -153,23 +153,23 @@ func TestVocabularyCycleIntegration(t *testing.T) {
 	assert.Equal(t, int64(1), scalarCount(t, db,
 		"SELECT count() FROM reporting.dim_accounts FINAL WHERE account_id = "+chQuote(clearingID)))
 
-	// Backfill обогатил историческую строку факта (мутации ClickHouse
-	// асинхронны - ожидание с дедлайном); счет вне плана не тронут.
+	// Backfill enriched the historical fact row (ClickHouse mutations are
+	// asynchronous - waiting with a deadline); the out-of-plan account is untouched.
 	waitEnriched(t, db, transactionID, "acc-merchant", "merchant", "m-1")
 	require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(
 		"SELECT account_type FROM reporting.fact_ledger_entries FINAL WHERE transaction_id = %s AND account_id = 'acc-legacy'",
 		chQuote(transactionID))).Scan(&accountType))
-	assert.Empty(t, accountType, "счет вне плана остается без словарной записи")
+	assert.Empty(t, accountType, "an out-of-plan account stays without a vocabulary record")
 
-	// Повторный цикл идемпотентен.
+	// A repeated cycle is idempotent.
 	inserted, mutations, err = syncer.Cycle(ctx)
 	require.NoError(t, err)
-	assert.Zero(t, inserted, "повторный цикл не дублирует словарь")
-	assert.Zero(t, mutations, "обогащенные строки повторно не мутируются")
+	assert.Zero(t, inserted, "a repeated cycle does not duplicate the vocabulary")
+	assert.Zero(t, mutations, "enriched rows are not mutated again")
 
-	// Новый актив известного мерчанта: факт платежа требует счет merchant по
-	// паре (BTC, 8), которого нет в словаре - мерчант пересинхронизируется,
-	// вносится только новая строка (diff).
+	// A new asset of a known merchant: the payment fact requires a merchant
+	// account for the (BTC, 8) pair missing from the vocabulary - the merchant
+	// is resynchronized, only the new row is inserted (diff).
 	stub.SeedAccounts("m-1",
 		ledgerstub.Account{ID: "acc-merchant", Type: "merchant", Asset: "USDT", Decimals: 6},
 		ledgerstub.Account{ID: "acc-payout", Type: "payout", Asset: "USDT", Decimals: 6},
@@ -178,15 +178,15 @@ func TestVocabularyCycleIntegration(t *testing.T) {
 	insertPaymentFact(t, db, "pay-"+uuid.NewString(), "m-1", "BTC", 8)
 	inserted, mutations, err = syncer.Cycle(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 1, inserted, "новый счет известного мерчанта попадает в словарь")
+	assert.Equal(t, 1, inserted, "a new account of a known merchant gets into the vocabulary")
 	assert.Zero(t, mutations)
 	require.NoError(t, db.QueryRowContext(ctx,
 		"SELECT account_type FROM reporting.dim_accounts FINAL WHERE account_id = 'acc-merchant-btc'").
 		Scan(&accountType))
 	assert.Equal(t, "merchant", accountType)
 
-	// Недоступный Ledger не роняет сервис: цикл возвращает ошибку, счетчик
-	// ошибок растет, следующий цикл повторится.
+	// An unavailable Ledger does not bring the service down: the cycle returns
+	// an error, the error counter grows, the next cycle will retry.
 	stub.Stop()
 	insertPaymentFact(t, db, "pay-"+uuid.NewString(), "m-2", "USDT", 6)
 	_, _, err = syncer.Cycle(ctx)
@@ -195,8 +195,8 @@ func TestVocabularyCycleIntegration(t *testing.T) {
 	assert.Equal(t, int64(1), counters.VocabularyErrors.Load())
 }
 
-// waitEnriched ожидает обогащения строки факта значениями словаря (мутации
-// ClickHouse применяются асинхронно).
+// waitEnriched waits for a fact row to be enriched with vocabulary values
+// (ClickHouse mutations are applied asynchronously).
 func waitEnriched(t *testing.T, db *sql.DB, transactionID, accountID, wantType, wantMerchant string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -209,13 +209,13 @@ func waitEnriched(t *testing.T, db *sql.DB, transactionID, accountID, wantType, 
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("строка не обогащена: account_type=%q merchant_id=%q", accountType, merchantID)
+			t.Fatalf("row is not enriched: account_type=%q merchant_id=%q", accountType, merchantID)
 		}
 		time.Sleep(time.Second)
 	}
 }
 
-// scalarCount выполняет COUNT-запрос к ClickHouse.
+// scalarCount executes a COUNT query against ClickHouse.
 func scalarCount(t *testing.T, db *sql.DB, query string) int64 {
 	t.Helper()
 	var count int64

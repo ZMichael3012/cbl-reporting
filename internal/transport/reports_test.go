@@ -11,8 +11,8 @@ import (
 	"github.com/cbl/cbl-reporting/internal/reports"
 )
 
-// TestMapQueryError проверяет перевод доменных ошибок в коды gRPC; внутренние
-// ошибки не раскрывают деталей клиенту.
+// TestMapQueryError checks the mapping of domain errors to gRPC codes;
+// internal errors do not disclose details to the client.
 func TestMapQueryError(t *testing.T) {
 	server := NewReportsServer(nil, nil)
 
@@ -24,5 +24,5 @@ func TestMapQueryError(t *testing.T) {
 
 	err = server.mapQueryError(errors.New("clickhouse connection refused"), "payments")
 	require.Equal(t, codes.Internal, status.Code(err))
-	require.NotContains(t, err.Error(), "connection refused", "детали внутренней ошибки не отдаются")
+	require.NotContains(t, err.Error(), "connection refused", "internal error details are not returned")
 }

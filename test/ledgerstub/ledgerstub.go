@@ -1,6 +1,6 @@
-// Пакет ledgerstub поднимает тестовый LedgerService (gRPC) с сетевыми
-// фикстурами: используется интеграционными тестами словаря и сверки reporting
-// и e2e-стендом сервиса (в продуктовый код не входит).
+// Package ledgerstub starts a test LedgerService (gRPC) with network
+// fixtures: it is used by the reporting vocabulary and ledger check integration
+// tests and by the service e2e stand (not part of production code).
 package ledgerstub
 
 import (
@@ -20,31 +20,31 @@ import (
 	ledgerv1 "github.com/cbl/cbl-protos/gen/go/billing/ledger/v1"
 )
 
-// Account описывает счет мерчанта фикстуры.
+// Account describes a fixture merchant account.
 type Account struct {
-	// ID задает идентификатор счета.
+	// ID sets the account identifier.
 	ID string
-	// Type задает тип счета (merchant или payout).
+	// Type sets the account type (merchant or payout).
 	Type string
-	// Asset задает код актива.
+	// Asset sets the asset code.
 	Asset string
-	// Decimals задает шкалу актива.
+	// Decimals sets the asset scale.
 	Decimals uint32
 }
 
-// Entry описывает проводку фикстуры.
+// Entry describes a fixture ledger entry.
 type Entry struct {
-	// TransactionID задает идентификатор транзакции.
+	// TransactionID sets the transaction identifier.
 	TransactionID string
-	// Direction задает направление (debit или credit).
+	// Direction sets the direction (debit or credit).
 	Direction string
-	// AmountMinor задает сумму в минимальных единицах.
+	// AmountMinor sets the amount in minor units.
 	AmountMinor int64
-	// CreatedAt задает время проводки (фильтр периода и окно сверки).
+	// CreatedAt sets the entry time (period filter and check window).
 	CreatedAt time.Time
 }
 
-// Server описывает тестовый LedgerService.
+// Server describes the test LedgerService.
 type Server struct {
 	ledgerv1.UnimplementedLedgerServiceServer
 
@@ -55,7 +55,7 @@ type Server struct {
 	grpc     *grpc.Server
 }
 
-// New собирает пустой тестовый сервер.
+// New builds an empty test server.
 func New() *Server {
 	return &Server{
 		accounts: make(map[string][]Account),
@@ -63,22 +63,22 @@ func New() *Server {
 	}
 }
 
-// SeedAccounts задает счета мерчанта (повторный вызов заменяет набор).
+// SeedAccounts sets the merchant accounts (a repeated call replaces the set).
 func (s *Server) SeedAccounts(merchantRef string, accounts ...Account) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.accounts[merchantRef] = append([]Account(nil), accounts...)
 }
 
-// SeedEntries задает проводки счета (повторный вызов заменяет набор).
+// SeedEntries sets the account entries (a repeated call replaces the set).
 func (s *Server) SeedEntries(accountID string, entries ...Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[accountID] = append([]Entry(nil), entries...)
 }
 
-// Start поднимает gRPC-сервер на адресе (пусто - случайный порт localhost) и
-// возвращает фактический адрес для подключения.
+// Start starts the gRPC server on the address (empty - a random localhost port)
+// and returns the actual address to connect to.
 func (s *Server) Start(addr string) (string, error) {
 	if addr == "" {
 		addr = "127.0.0.1:0"
@@ -97,7 +97,7 @@ func (s *Server) Start(addr string) (string, error) {
 	return listener.Addr().String(), nil
 }
 
-// Stop останавливает сервер и освобождает порт.
+// Stop stops the server and releases the port.
 func (s *Server) Stop() {
 	s.mu.Lock()
 	grpcSrv, listener := s.grpc, s.listener
@@ -111,7 +111,7 @@ func (s *Server) Stop() {
 	}
 }
 
-// ListMerchantAccounts возвращает счета мерчанта по фикстурам.
+// ListMerchantAccounts returns the fixture merchant accounts.
 func (s *Server) ListMerchantAccounts(_ context.Context, req *ledgerv1.ListMerchantAccountsRequest) (*ledgerv1.ListMerchantAccountsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,8 +130,8 @@ func (s *Server) ListMerchantAccounts(_ context.Context, req *ledgerv1.ListMerch
 	return response, nil
 }
 
-// ListEntries возвращает страницу проводок счета за период [from, to) с
-// курсорной пагинацией (курсор - смещение в стабильном порядке).
+// ListEntries returns a page of account entries for the period [from, to) with
+// cursor pagination (the cursor is an offset in a stable order).
 func (s *Server) ListEntries(_ context.Context, req *ledgerv1.ListEntriesRequest) (*ledgerv1.ListEntriesResponse, error) {
 	s.mu.Lock()
 	fixtures := append([]Entry(nil), s.entries[req.GetAccountId()]...)
@@ -201,7 +201,7 @@ func (s *Server) ListEntries(_ context.Context, req *ledgerv1.ListEntriesRequest
 	return response, nil
 }
 
-// directionValue переводит имя направления фикстуры в значение контракта.
+// directionValue maps a fixture direction name to the contract value.
 func directionValue(direction string) (commonv1.Direction, error) {
 	switch direction {
 	case "debit":

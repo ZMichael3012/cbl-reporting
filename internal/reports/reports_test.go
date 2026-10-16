@@ -15,11 +15,11 @@ import (
 	"github.com/cbl/cbl-reporting/internal/storage"
 )
 
-// canonicalMoneyPattern задает канонический вид денежных значений контракта.
+// canonicalMoneyPattern defines the canonical form of contract money values.
 var canonicalMoneyPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
-// TestFormatMinor проверяет каноническую десятичную строку из minor units
-// (float запрещен; знак и нулевая шкала).
+// TestFormatMinor checks the canonical decimal string from minor units
+// (float is forbidden; sign and zero scale).
 func TestFormatMinor(t *testing.T) {
 	cases := []struct {
 		minor    int64
@@ -42,11 +42,11 @@ func TestFormatMinor(t *testing.T) {
 	for _, tc := range cases {
 		got := FormatMinor(tc.minor, tc.decimals)
 		assert.Equal(t, tc.want, got, "FormatMinor(%d, %d)", tc.minor, tc.decimals)
-		assert.Regexp(t, canonicalMoneyPattern, got, "канонический вид значения")
+		assert.Regexp(t, canonicalMoneyPattern, got, "canonical value form")
 	}
 }
 
-// TestCursorRoundTrip проверяет кодирование и декодирование курсора.
+// TestCursorRoundTrip checks cursor encoding and decoding.
 func TestCursorRoundTrip(t *testing.T) {
 	keys := []string{"2026-10-15 10:00:00.000", "pay-1", "ev-1"}
 	encoded, err := encodeCursor("payments", keys)
@@ -56,7 +56,7 @@ func TestCursorRoundTrip(t *testing.T) {
 	assert.Equal(t, keys, decoded)
 }
 
-// TestCursorInvalid проверяет отказ на битом, чужом и несовпадающем курсоре.
+// TestCursorInvalid checks rejection of a broken, foreign and mismatched cursor.
 func TestCursorInvalid(t *testing.T) {
 	encoded, err := encodeCursor("payments", []string{"2026-10-15 10:00:00.000", "pay-1", "ev-1"})
 	require.NoError(t, err)
@@ -66,14 +66,14 @@ func TestCursorInvalid(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidArgument)
 
 	_, err = decodeCursor(encoded, "payouts", kinds)
-	require.ErrorIs(t, err, ErrInvalidArgument, "курсор другого отчета")
+	require.ErrorIs(t, err, ErrInvalidArgument, "cursor of another report")
 
 	_, err = decodeCursor(encoded, "payments", catalog["ledger_entries"].cursorKeys[""])
-	require.ErrorIs(t, err, ErrInvalidArgument, "несовпадающее число ключей")
+	require.ErrorIs(t, err, ErrInvalidArgument, "mismatched key count")
 }
 
-// TestCursorKeyValidation проверяет отказ на структурно корректном, но
-// испорченном курсоре (ключи не доходят до ClickHouse).
+// TestCursorKeyValidation checks rejection of a structurally valid but
+// corrupted cursor (keys must not reach ClickHouse).
 func TestCursorKeyValidation(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -99,7 +99,7 @@ func TestCursorKeyValidation(t *testing.T) {
 	}
 }
 
-// TestCursorTooLong проверяет отказ на курсоре сверх длины контракта.
+// TestCursorTooLong checks rejection of a cursor over the contract length.
 func TestCursorTooLong(t *testing.T) {
 	db, err := storage.Open("clickhouse://cbl:cbl@127.0.0.1:1/reporting")
 	require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestCursorTooLong(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidArgument)
 }
 
-// TestValidate проверяет ограничения каталога.
+// TestValidate checks catalog limits.
 func TestValidate(t *testing.T) {
 	now := time.Now()
 	earlier := now.Add(-time.Hour)
@@ -123,18 +123,18 @@ func TestValidate(t *testing.T) {
 	require.NoError(t, validate(QueryRequest{Limit: 100, PeriodFrom: &earlier, PeriodTo: &now}, def))
 
 	turnover := catalog["turnover"]
-	require.ErrorIs(t, validate(QueryRequest{}, turnover), ErrInvalidArgument, "turnover требует мерчанта")
+	require.ErrorIs(t, validate(QueryRequest{}, turnover), ErrInvalidArgument, "turnover requires a merchant")
 	require.NoError(t, validate(QueryRequest{MerchantID: "m-1"}, turnover))
 }
 
-// TestResolveGroupBy проверяет whitelist группировок.
+// TestResolveGroupBy checks the grouping whitelist.
 func TestResolveGroupBy(t *testing.T) {
 	_, err := resolveGroupBy("asset", catalog["payments"])
-	require.ErrorIs(t, err, ErrInvalidArgument, "payments без группировки")
+	require.ErrorIs(t, err, ErrInvalidArgument, "payments without grouping")
 
 	groupBy, err := resolveGroupBy("", catalog["turnover"])
 	require.NoError(t, err)
-	assert.Equal(t, "asset", groupBy, "дефолтная группировка turnover")
+	assert.Equal(t, "asset", groupBy, "default turnover grouping")
 
 	groupBy, err = resolveGroupBy("day_asset", catalog["turnover"])
 	require.NoError(t, err)
@@ -144,13 +144,13 @@ func TestResolveGroupBy(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidArgument)
 }
 
-// TestReportsCatalog проверяет состав закрытого каталога.
+// TestReportsCatalog checks the composition of the closed catalog.
 func TestReportsCatalog(t *testing.T) {
 	assert.Equal(t, []string{"ledger_entries", "payments", "payouts", "turnover"}, Reports())
 }
 
-// TestQueryUnknownReport проверяет отказ на типе вне каталога (до обращения к
-// ClickHouse: подключение не резолвится).
+// TestQueryUnknownReport checks rejection of a type outside the catalog
+// (before accessing ClickHouse: the connection is not resolved).
 func TestQueryUnknownReport(t *testing.T) {
 	db, err := storage.Open("clickhouse://cbl:cbl@127.0.0.1:1/reporting")
 	require.NoError(t, err)
@@ -162,14 +162,14 @@ func TestQueryUnknownReport(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnknownReport)
 }
 
-// TestNewRequiresDB проверяет обязательность хранилища.
+// TestNewRequiresDB checks that the storage is required.
 func TestNewRequiresDB(t *testing.T) {
 	var db *sql.DB
 	_, err := New(db)
 	require.Error(t, err)
 }
 
-// TestTruncateMilli проверяет выравнивание границ периода до миллисекунд.
+// TestTruncateMilli checks alignment of period bounds to milliseconds.
 func TestTruncateMilli(t *testing.T) {
 	value := time.Date(2026, 10, 15, 10, 0, 0, 123456789, time.UTC)
 	truncated := truncateMilli(&value)
@@ -178,7 +178,7 @@ func TestTruncateMilli(t *testing.T) {
 	assert.Nil(t, truncateMilli(nil))
 }
 
-// TestFormatTime проверяет RFC 3339 с миллисекундами в UTC.
+// TestFormatTime checks RFC 3339 with milliseconds in UTC.
 func TestFormatTime(t *testing.T) {
 	value := time.Date(2026, 10, 15, 10, 0, 0, 123456789, time.UTC)
 	assert.Equal(t, "2026-10-15T10:00:00.123Z", formatTime(value))

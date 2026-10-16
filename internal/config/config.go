@@ -1,5 +1,5 @@
-// Пакет config собирает и валидирует конфигурацию сервиса reporting из
-// переменных окружения (fail-fast на старте).
+// Package config assembles and validates the configuration of the reporting
+// service from environment variables (fail-fast at startup).
 package config
 
 import (
@@ -11,49 +11,49 @@ import (
 	"time"
 )
 
-// hostPortPattern задает допустимую форму адреса gRPC-зависимости.
+// hostPortPattern defines the allowed form of a gRPC dependency address.
 var hostPortPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}$`)
 
-// Config описывает проверенную конфигурацию сервиса.
+// Config describes the validated configuration of the service.
 type Config struct {
-	// ClickHouseDSN задает строку подключения к ClickHouse (обязательна).
+	// ClickHouseDSN sets the ClickHouse connection string (required).
 	ClickHouseDSN string
-	// KafkaBrokers задает внутренний список брокеров для Kafka engine.
+	// KafkaBrokers sets the internal broker list for the Kafka engine.
 	KafkaBrokers string
-	// SchemaPath задает путь wire-схемы относительно format_schema_path.
+	// SchemaPath sets the wire schema path relative to format_schema_path.
 	SchemaPath string
-	// MigrationsDir задает каталог goose-миграций.
+	// MigrationsDir sets the directory of goose migrations.
 	MigrationsDir string
-	// HTTPAddr задает адрес административного HTTP-сервера.
+	// HTTPAddr sets the address of the administrative HTTP server.
 	HTTPAddr string
-	// GRPCAddr задает адрес gRPC-сервера (health).
+	// GRPCAddr sets the address of the gRPC server (health).
 	GRPCAddr string
-	// MetricsAddr задает адрес сервера метрик.
+	// MetricsAddr sets the address of the metrics server.
 	MetricsAddr string
-	// LedgerGRPCAddr задает адрес LedgerService (обязателен).
+	// LedgerGRPCAddr sets the LedgerService address (required).
 	LedgerGRPCAddr string
-	// LedgerTimeout задает таймаут вызовов Ledger.
+	// LedgerTimeout sets the timeout of Ledger calls.
 	LedgerTimeout time.Duration
-	// DimRefreshInterval задает интервал наполнения словаря.
+	// DimRefreshInterval sets the dictionary refresh interval.
 	DimRefreshInterval time.Duration
-	// DimMerchantsLimit задает предел мерчантов на цикл синхронизации.
+	// DimMerchantsLimit sets the merchant limit per synchronization cycle.
 	DimMerchantsLimit int
-	// BackfillLimit задает предел счетов на цикл backfill.
+	// BackfillLimit sets the account limit per backfill cycle.
 	BackfillLimit int
-	// CheckInterval задает интервал сверки с Ledger.
+	// CheckInterval sets the interval of reconciliation with Ledger.
 	CheckInterval time.Duration
-	// CheckWindow задает размер окна сверки.
+	// CheckWindow sets the size of the reconciliation window.
 	CheckWindow time.Duration
-	// CheckAccounts задает число счетов на цикл сверки.
+	// CheckAccounts sets the number of accounts per reconciliation cycle.
 	CheckAccounts int
-	// CheckPageLimit задает размер страницы ListEntries.
+	// CheckPageLimit sets the size of a ListEntries page.
 	CheckPageLimit uint32
-	// CheckMaxPages задает предел страниц на счет за цикл.
+	// CheckMaxPages sets the page limit per account per cycle.
 	CheckMaxPages int
 }
 
-// Load собирает конфигурацию через переданный доступ к переменным окружения
-// (nil значение - значение по умолчанию) и валидирует все ограничения.
+// Load assembles the configuration through the given environment accessor
+// (an empty value means the default) and validates all constraints.
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
 		ClickHouseDSN:  getenv("CLICKHOUSE_DSN"),
@@ -96,8 +96,8 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.CheckWindow, err = durationEnv(getenv, "LEDGER_CHECK_WINDOW", 5*time.Minute, time.Second, 24*time.Hour); err != nil {
 		return Config{}, err
 	}
-	// Однократный проход окна: при интервале больше окна между циклами
-	// остаются непроверенные отрезки таймлайна.
+	// A single pass over the window: with an interval greater than the window,
+	// unchecked timeline segments remain between cycles.
 	if cfg.CheckWindow < cfg.CheckInterval {
 		return Config{}, fmt.Errorf("LEDGER_CHECK_WINDOW (%s) must be not less than LEDGER_CHECK_INTERVAL (%s)", cfg.CheckWindow, cfg.CheckInterval)
 	}
@@ -108,14 +108,14 @@ func Load(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.CheckPageLimit = uint32(pageLimit) //nolint:gosec // границы intEnv: 1 - 10000, переполнение невозможно
+	cfg.CheckPageLimit = uint32(pageLimit) //nolint:gosec // intEnv bounds: 1 - 10000, overflow is impossible
 	if cfg.CheckMaxPages, err = intEnv(getenv, "LEDGER_CHECK_MAX_PAGES", 10, 1, 100); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
-// validHostPort проверяет форму host:port с допустимым диапазоном порта.
+// validHostPort checks the host:port form with an allowed port range.
 func validHostPort(value string) bool {
 	if !hostPortPattern.MatchString(value) {
 		return false
@@ -127,7 +127,7 @@ func validHostPort(value string) bool {
 	return true
 }
 
-// fallback возвращает значение или запасной вариант для пустой строки.
+// fallback returns the value or the fallback for an empty string.
 func fallback(value, defaultValue string) string {
 	if value == "" {
 		return defaultValue
@@ -135,7 +135,7 @@ func fallback(value, defaultValue string) string {
 	return value
 }
 
-// durationEnv разбирает длительность из окружения с границами включительно.
+// durationEnv parses a duration from the environment with inclusive bounds.
 func durationEnv(getenv func(string) string, key string, defaultValue, minValue, maxValue time.Duration) (time.Duration, error) {
 	raw := getenv(key)
 	if raw == "" {
@@ -151,7 +151,7 @@ func durationEnv(getenv func(string) string, key string, defaultValue, minValue,
 	return value, nil
 }
 
-// intEnv разбирает целое из окружения с границами включительно.
+// intEnv parses an integer from the environment with inclusive bounds.
 func intEnv(getenv func(string) string, key string, defaultValue, minValue, maxValue int) (int, error) {
 	raw := getenv(key)
 	if raw == "" {

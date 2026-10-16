@@ -30,7 +30,7 @@ import (
 	"github.com/cbl/cbl-reporting/internal/transport"
 )
 
-// startClickHouse поднимает ClickHouse на реальном контейнере.
+// startClickHouse starts ClickHouse on a real container.
 func startClickHouse(t *testing.T) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
@@ -70,12 +70,12 @@ func startClickHouse(t *testing.T) *sql.DB {
 	return db
 }
 
-// chQuote экранирует литерал тестовых INSERT-ов.
+// chQuote escapes literals of test INSERTs.
 func chQuote(value string) string {
 	return "'" + strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `'`, `\'`) + "'"
 }
 
-// insertPayment вставляет факт платежа с заданным временем.
+// insertPayment inserts a payment fact with the given time.
 func insertPayment(t *testing.T, db *sql.DB, paymentID, merchantID string, occurredAt string) {
 	t.Helper()
 	query := fmt.Sprintf(`INSERT INTO reporting.fact_payment_events
@@ -88,7 +88,7 @@ func insertPayment(t *testing.T, db *sql.DB, paymentID, merchantID string, occur
 	require.NoError(t, err)
 }
 
-// insertPayout вставляет факт выплаты.
+// insertPayout inserts a payout fact.
 func insertPayout(t *testing.T, db *sql.DB, payoutID, merchantID, occurredAt string) {
 	t.Helper()
 	query := fmt.Sprintf(`INSERT INTO reporting.fact_payouts
@@ -101,7 +101,7 @@ func insertPayout(t *testing.T, db *sql.DB, payoutID, merchantID, occurredAt str
 	require.NoError(t, err)
 }
 
-// insertLedgerEntry вставляет проводку леджера (с обогащением словаря или без).
+// insertLedgerEntry inserts a ledger entry (with or without dictionary enrichment).
 func insertLedgerEntry(t *testing.T, db *sql.DB, transactionID string, entryIndex int, accountID, accountType, merchantID, asset string, decimals uint8, amount int64, direction, occurredAt string) {
 	t.Helper()
 	query := fmt.Sprintf(`INSERT INTO reporting.fact_ledger_entries
@@ -116,7 +116,7 @@ func insertLedgerEntry(t *testing.T, db *sql.DB, transactionID string, entryInde
 	require.NoError(t, err)
 }
 
-// seedFacts наполняет факты для интеграционных проверок отчетов.
+// seedFacts populates facts for report integration checks.
 func seedFacts(t *testing.T, db *sql.DB) {
 	t.Helper()
 	insertPayment(t, db, "pay-1", "m-1", "2026-10-15 10:01:00.000")
@@ -131,8 +131,8 @@ func seedFacts(t *testing.T, db *sql.DB) {
 	insertLedgerEntry(t, db, "tx-4", 0, "acc-merchant", "merchant", "m-1", "USDT", 6, -2_000000, "debit", "2026-10-15 10:08:00.000")
 }
 
-// TestReportsQueryIntegration проверяет все отчеты каталога на реальном
-// ClickHouse: выборки, формат значений, фильтр мерчанта, период и пагинацию.
+// TestReportsQueryIntegration checks all catalog reports on a real
+// ClickHouse: queries, value format, merchant filter, period and pagination.
 func TestReportsQueryIntegration(t *testing.T) {
 	ctx := context.Background()
 	db := startClickHouse(t)
@@ -142,7 +142,7 @@ func TestReportsQueryIntegration(t *testing.T) {
 	service, err := reports.New(db)
 	require.NoError(t, err)
 
-	// payments: страница, порядок, канонические деньги и время.
+	// payments: page, order, canonical money and time.
 	page, err := service.Query(ctx, reports.QueryRequest{ReportType: "payments", MerchantID: "m-1", Limit: 20})
 	require.NoError(t, err)
 	require.Len(t, page.Rows, 2)
@@ -156,7 +156,7 @@ func TestReportsQueryIntegration(t *testing.T) {
 	assert.Equal(t, "2026-10-15T10:01:00.000Z", page.Rows[0]["occurred_at"])
 	assert.Equal(t, "m-1", page.Rows[0]["merchant_id"])
 
-	// Пагинация: limit=1, продолжение по курсору, конец отчета.
+	// Pagination: limit=1, continuation by cursor, end of report.
 	first, err := service.Query(ctx, reports.QueryRequest{ReportType: "payments", MerchantID: "m-1", Limit: 1})
 	require.NoError(t, err)
 	require.Len(t, first.Rows, 1)
@@ -167,7 +167,7 @@ func TestReportsQueryIntegration(t *testing.T) {
 	assert.Equal(t, "pay-2", second.Rows[0]["payment_id"])
 	assert.Empty(t, second.NextCursor)
 
-	// Период включается на обеих границах.
+	// The period is inclusive on both bounds.
 	boundary := time.Date(2026, 10, 15, 10, 1, 0, 0, time.UTC)
 	exact, err := service.Query(ctx, reports.QueryRequest{
 		ReportType: "payments", MerchantID: "m-1", PeriodFrom: &boundary, PeriodTo: &boundary, Limit: 20,
@@ -176,7 +176,7 @@ func TestReportsQueryIntegration(t *testing.T) {
 	require.Len(t, exact.Rows, 1)
 	assert.Equal(t, "pay-1", exact.Rows[0]["payment_id"])
 
-	// payouts: строки и поля контракта cf-2.1.
+	// payouts: rows and fields of contract cf-2.1.
 	page, err = service.Query(ctx, reports.QueryRequest{ReportType: "payouts", MerchantID: "m-1", Limit: 20})
 	require.NoError(t, err)
 	require.Len(t, page.Rows, 2)
@@ -185,18 +185,18 @@ func TestReportsQueryIntegration(t *testing.T) {
 	assert.Equal(t, "inv-1", page.Rows[0]["refund_invoice_id"])
 	assert.Equal(t, "mock", page.Rows[0]["provider"])
 
-	// ledger_entries: мерчантский фильтр по денормализации; строки без словаря
-	// (acc-clearing) мерчанту не видны.
+	// ledger_entries: merchant filter by denormalization; rows without a
+	// dictionary record (acc-clearing) are invisible to the merchant.
 	page, err = service.Query(ctx, reports.QueryRequest{ReportType: "ledger_entries", MerchantID: "m-1", Limit: 20})
 	require.NoError(t, err)
 	require.Len(t, page.Rows, 4)
-	assert.Equal(t, "tx-2", page.Rows[0]["transaction_id"], "порядок по occurred_at")
+	assert.Equal(t, "tx-2", page.Rows[0]["transaction_id"], "order by occurred_at")
 	assert.Equal(t, "merchant", page.Rows[0]["account_type"])
 	assert.Equal(t, "0", page.Rows[0]["entry_index"])
 	assert.Equal(t, "credit", page.Rows[0]["direction"])
 	assert.Equal(t, "50.000000", page.Rows[0]["amount"])
 
-	// turnover: агрегаты по активу (шкалы не смешиваются), знак отрицательных сумм.
+	// turnover: aggregates per asset (scales are not mixed), sign of negative sums.
 	page, err = service.Query(ctx, reports.QueryRequest{ReportType: "turnover", MerchantID: "m-1", Limit: 20})
 	require.NoError(t, err)
 	require.Len(t, page.Rows, 2)
@@ -204,7 +204,7 @@ func TestReportsQueryIntegration(t *testing.T) {
 	assert.Equal(t, "7.000000", page.Rows[0]["credit_total"])
 	assert.Equal(t, "1", page.Rows[0]["entries_count"])
 	assert.Equal(t, "USDT", page.Rows[1]["asset"])
-	assert.Equal(t, "-2.000000", page.Rows[1]["debit_total"], "отрицательное сторно форматируется со знаком")
+	assert.Equal(t, "-2.000000", page.Rows[1]["debit_total"], "a negative reversal is formatted with its sign")
 	assert.Equal(t, "150.000000", page.Rows[1]["credit_total"])
 	assert.Equal(t, "3", page.Rows[1]["entries_count"])
 
@@ -213,25 +213,25 @@ func TestReportsQueryIntegration(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, page.Rows, 3)
-	assert.Equal(t, "2026-10-14T00:00:00.000Z", page.Rows[0]["day"], "день - RFC 3339 в UTC")
+	assert.Equal(t, "2026-10-14T00:00:00.000Z", page.Rows[0]["day"], "the day is RFC 3339 in UTC")
 	assert.Equal(t, "50.000000", page.Rows[0]["credit_total"])
 	assert.Equal(t, "2026-10-15T00:00:00.000Z", page.Rows[1]["day"])
 	assert.Equal(t, "ETH", page.Rows[1]["asset"])
 	assert.Equal(t, "-2.000000", page.Rows[2]["debit_total"])
 
-	// Пустая страница: у мерчанта без данных строк нет.
+	// Empty page: a merchant without data has no rows.
 	page, err = service.Query(ctx, reports.QueryRequest{ReportType: "payments", MerchantID: "m-empty", Limit: 20})
 	require.NoError(t, err)
 	assert.Empty(t, page.Rows)
 	assert.Empty(t, page.NextCursor)
 
-	// Пагинация постранично для каждого отчета: без дублей и потерь.
+	// Page-by-page pagination for every report: no duplicates and no losses.
 	walkPages(t, service, reports.QueryRequest{ReportType: "payments", MerchantID: "m-1"}, 2)
 	walkPages(t, service, reports.QueryRequest{ReportType: "payouts", MerchantID: "m-1"}, 2)
 	walkPages(t, service, reports.QueryRequest{ReportType: "ledger_entries", MerchantID: "m-1"}, 4)
 	walkPages(t, service, reports.QueryRequest{ReportType: "turnover", MerchantID: "m-1"}, 2)
 	walkPages(t, service, reports.QueryRequest{ReportType: "turnover", MerchantID: "m-1", GroupBy: "day_asset"}, 3)
-	// Ошибки каталога и параметров.
+	// Catalog and parameter errors.
 	_, err = service.Query(ctx, reports.QueryRequest{ReportType: "invoices"})
 	require.ErrorIs(t, err, reports.ErrUnknownReport)
 	_, err = service.Query(ctx, reports.QueryRequest{ReportType: "payments", GroupBy: "asset"})
@@ -243,14 +243,15 @@ func TestReportsQueryIntegration(t *testing.T) {
 	_, err = service.Query(ctx, reports.QueryRequest{ReportType: "payments", Cursor: "not-a-cursor"})
 	require.ErrorIs(t, err, reports.ErrInvalidArgument)
 
-	// Структурно корректный, но испорченный курсор отбивается до ClickHouse.
+	// A structurally valid but corrupted cursor is rejected before ClickHouse.
 	forged := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"report":"payments","keys":["garbage","x","y"]}`))
 	_, err = service.Query(ctx, reports.QueryRequest{ReportType: "payments", Cursor: forged})
-	require.ErrorIs(t, err, reports.ErrInvalidArgument, "испорченный курсор не доходит до ClickHouse")
+	require.ErrorIs(t, err, reports.ErrInvalidArgument, "a corrupted cursor does not reach ClickHouse")
 }
 
-// walkPages проходит отчет страницами по одной строке и проверяет отсутствие
-// дублей, полноту обхода (wantRows строк) и завершение курсора.
+// walkPages walks a report page by page with one row per page and checks the
+// absence of duplicates, the completeness of the walk (wantRows rows) and
+// the cursor termination.
 func walkPages(t *testing.T, service *reports.Service, base reports.QueryRequest, wantRows int) {
 	t.Helper()
 	seen := make(map[string]struct{})
@@ -260,23 +261,23 @@ func walkPages(t *testing.T, service *reports.Service, base reports.QueryRequest
 		request.Limit = 1
 		request.Cursor = cursor
 		page, err := service.Query(context.Background(), request)
-		require.NoError(t, err, "страница %d", pageNumber)
+		require.NoError(t, err, "page %d", pageNumber)
 		for _, row := range page.Rows {
 			key := rowKey(row)
 			_, duplicate := seen[key]
-			require.False(t, duplicate, "дубль строки %q", key)
+			require.False(t, duplicate, "duplicate row %q", key)
 			seen[key] = struct{}{}
 		}
 		if page.NextCursor == "" {
-			require.Len(t, seen, wantRows, "обход %s собрал все строки", base.ReportType)
+			require.Len(t, seen, wantRows, "the walk of %s collected all rows", base.ReportType)
 			return
 		}
 		cursor = page.NextCursor
 	}
-	t.Fatal("пагинация не завершилась за 20 страниц")
+	t.Fatal("pagination did not finish within 20 pages")
 }
 
-// rowKey строит детерминированный ключ уникальности строки отчета.
+// rowKey builds a deterministic uniqueness key of a report row.
 func rowKey(row map[string]string) string {
 	fields := make([]string, 0, len(row))
 	for name := range row {
@@ -293,8 +294,8 @@ func rowKey(row map[string]string) string {
 	return builder.String()
 }
 
-// TestReportsGRPCIntegration проверяет маппинг доменных ошибок в коды gRPC на
-// реальном сервере.
+// TestReportsGRPCIntegration checks the mapping of domain errors to gRPC
+// codes on a real server.
 func TestReportsGRPCIntegration(t *testing.T) {
 	ctx := context.Background()
 	db := startClickHouse(t)

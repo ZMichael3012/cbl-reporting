@@ -1,6 +1,6 @@
-// Пакет vocabulary наполняет словарь reporting.dim_accounts (мерчантские счета
-// из LedgerService, системные - деривацией плана счетов) и backfill-ит
-// исторические строки фактов леджера (CBL-11.3).
+// Package vocabulary fills the reporting.dim_accounts vocabulary (merchant
+// accounts from LedgerService, system ones by account plan derivation) and
+// backfills historical ledger fact rows (CBL-11.3).
 package vocabulary
 
 import (
@@ -19,12 +19,12 @@ import (
 	"github.com/cbl/cbl-reporting/internal/storage"
 )
 
-// Ledger описывает чтение счетов мерчанта (реализуется internal/ledger).
+// Ledger describes reading merchant accounts (implemented by internal/ledger).
 type Ledger interface {
 	ListMerchantAccounts(ctx context.Context, merchantRef string) ([]ledger.Account, error)
 }
 
-// Syncer периодически наполняет словарь и запускает backfill истории.
+// Syncer periodically fills the vocabulary and runs the history backfill.
 type Syncer struct {
 	db              *sql.DB
 	ledger          Ledger
@@ -36,7 +36,7 @@ type Syncer struct {
 	counters        *metrics.Counters
 }
 
-// New собирает воркер словаря; nil-логгер заменяется пустым.
+// New assembles the vocabulary worker; a nil logger is replaced with an empty one.
 func New(db *sql.DB, ledgerClient Ledger, refreshInterval time.Duration, backfillLimit, merchantsLimit int, log *zap.Logger, counters *metrics.Counters) (*Syncer, error) {
 	if db == nil || ledgerClient == nil {
 		return nil, errors.New("db and ledger client are required")
@@ -61,8 +61,9 @@ func New(db *sql.DB, ledgerClient Ledger, refreshInterval time.Duration, backfil
 	}, nil
 }
 
-// Run выполняет цикл сразу и затем по интервалу до отмены контекста; ошибки
-// цикла логируются и не завершают воркер (конвейер и readyz живут без словаря).
+// Run performs a cycle immediately and then on the interval until the context
+// is canceled; cycle errors are logged and do not terminate the worker (the
+// pipeline and readyz live without the vocabulary).
 func (s *Syncer) Run(ctx context.Context) {
 	s.runCycle(ctx)
 	ticker := time.NewTicker(s.refreshInterval)
@@ -77,7 +78,7 @@ func (s *Syncer) Run(ctx context.Context) {
 	}
 }
 
-// runCycle выполняет цикл и логирует результат.
+// runCycle performs a cycle and logs the result.
 func (s *Syncer) runCycle(ctx context.Context) {
 	inserted, mutations, err := s.Cycle(ctx)
 	if err != nil {
@@ -92,7 +93,7 @@ func (s *Syncer) runCycle(ctx context.Context) {
 	}
 }
 
-// Cycle выполняет один цикл: наполнение словаря и backfill истории.
+// Cycle performs a single cycle: filling the vocabulary and the history backfill.
 func (s *Syncer) Cycle(ctx context.Context) (inserted, mutations int, err error) {
 	inserted, err = s.refresh(ctx)
 	if err != nil {
@@ -105,8 +106,8 @@ func (s *Syncer) Cycle(ctx context.Context) (inserted, mutations int, err error)
 	return inserted, mutations, nil
 }
 
-// refresh вносит недостающие строки словаря: мерчантские счета из Ledger,
-// системные - производные от пар (asset, decimals) фактов леджера.
+// refresh inserts the missing vocabulary rows: merchant accounts from the
+// Ledger, system ones derived from (asset, decimals) pairs of ledger facts.
 func (s *Syncer) refresh(ctx context.Context) (int, error) {
 	merchants, err := s.merchantAccounts(ctx)
 	if err != nil {
@@ -124,10 +125,10 @@ func (s *Syncer) refresh(ctx context.Context) (int, error) {
 	return len(rows), nil
 }
 
-// merchantAccounts собирает строки словаря для мерчантов, чье требуемое
-// покрытие из фактов не выполнено (новый мерчант, новый актив известного
-// мерчанта, новый payout-счет): у Ledger запрашиваются все счета мерчанта, в
-// словарь вносятся отсутствующие и изменившиеся строки.
+// merchantAccounts collects vocabulary rows for merchants whose required
+// coverage from the facts is not satisfied (a new merchant, a new asset of a
+// known merchant, a new payout account): all merchant accounts are requested
+// from the Ledger, and missing and changed rows are inserted into the vocabulary.
 func (s *Syncer) merchantAccounts(ctx context.Context) ([]storage.DimAccount, error) {
 	pairs, err := storage.FactMerchantPairs(ctx, s.db)
 	if err != nil {
@@ -157,8 +158,8 @@ func (s *Syncer) merchantAccounts(ctx context.Context) ([]storage.DimAccount, er
 		merchants = append(merchants, merchantRef)
 	}
 	sort.Strings(merchants)
-	// Бюджет цикла с ротацией: хвост больших наборов не голодает (курсор
-	// двигается по кругу, покрытие пересчитывается каждый цикл).
+	// Per-cycle budget with rotation: the tail of large sets does not starve
+	// (the cursor moves in a circle, coverage is recalculated every cycle).
 	merchants, s.merchantCursor = rotateBudget(merchants, s.merchantCursor, s.merchantsLimit)
 
 	var rows []storage.DimAccount
@@ -190,8 +191,8 @@ func (s *Syncer) merchantAccounts(ctx context.Context) ([]storage.DimAccount, er
 	return rows, nil
 }
 
-// filterChanged оставляет строки, отсутствующие в словаре или отличающиеся от
-// сохраненных (diff по account_id).
+// filterChanged keeps rows missing from the vocabulary or differing from the
+// stored ones (diff by account_id).
 func filterChanged(ctx context.Context, db *sql.DB, candidates []storage.DimAccount) ([]storage.DimAccount, error) {
 	if len(candidates) == 0 {
 		return nil, nil
@@ -214,8 +215,8 @@ func filterChanged(ctx context.Context, db *sql.DB, candidates []storage.DimAcco
 	return changed, nil
 }
 
-// platformAccounts добавляет производные системные счета для пар (asset,
-// decimals), встреченных в фактах леджера (деривация CBL-003, раздел 9).
+// platformAccounts adds derived system accounts for the (asset, decimals)
+// pairs seen in ledger facts (CBL-003 derivation, section 9).
 func (s *Syncer) platformAccounts(ctx context.Context) ([]storage.DimAccount, error) {
 	pairs, err := storage.FactAssetPairs(ctx, s.db)
 	if err != nil {
@@ -245,7 +246,7 @@ func (s *Syncer) platformAccounts(ctx context.Context) ([]storage.DimAccount, er
 	return filterMissing(ctx, s.db, candidates)
 }
 
-// filterMissing оставляет кандидатов, отсутствующих в словаре.
+// filterMissing keeps candidates missing from the vocabulary.
 func filterMissing(ctx context.Context, db *sql.DB, candidates []storage.DimAccount) ([]storage.DimAccount, error) {
 	if len(candidates) == 0 {
 		return nil, nil
@@ -268,7 +269,7 @@ func filterMissing(ctx context.Context, db *sql.DB, candidates []storage.DimAcco
 	return missing, nil
 }
 
-// backfill обогащает исторические строки фактов леджера значениями словаря.
+// backfill enriches historical ledger fact rows with vocabulary values.
 func (s *Syncer) backfill(ctx context.Context) (int, error) {
 	unenriched, err := storage.FactUnenrichedAccounts(ctx, s.db, s.backfillLimit)
 	if err != nil {
@@ -299,9 +300,9 @@ func (s *Syncer) backfill(ctx context.Context) (int, error) {
 	return mutations, nil
 }
 
-// rotateBudget выбирает до limit элементов начиная после курсора с заворотом
-// (пустой курсор или неполный набор - все элементы, курсор сбрасывается);
-// возвращает выбранное и новый курсор.
+// rotateBudget selects up to limit elements starting after the cursor with
+// wraparound (an empty cursor or an incomplete set - all elements, the cursor
+// resets); it returns the selection and the new cursor.
 func rotateBudget(sorted []string, cursor string, limit int) ([]string, string) {
 	if len(sorted) <= limit {
 		return sorted, ""
@@ -320,8 +321,8 @@ func rotateBudget(sorted []string, cursor string, limit int) ([]string, string) 
 	return chosen, chosen[len(chosen)-1]
 }
 
-// dimRow валидирует строку словаря по правилам плана счетов (форма
-// идентификатора, шкала Ledger до сужения до UInt8, тип и ссылка мерчанта).
+// dimRow validates a vocabulary row against the account plan rules (identifier
+// shape, Ledger scale before narrowing to UInt8, type and merchant reference).
 func dimRow(accountID, accountType, merchantRef, asset string, decimals uint32) (storage.DimAccount, bool) {
 	if !domain.ValidAccountID(accountID) || !domain.ValidAsset(asset) || decimals > 18 {
 		return storage.DimAccount{}, false
@@ -337,6 +338,6 @@ func dimRow(accountID, accountType, merchantRef, asset string, decimals uint32) 
 		AccountType: accountType,
 		MerchantID:  merchantRef,
 		Asset:       asset,
-		Decimals:    uint8(decimals), //nolint:gosec // проверено выше: decimals <= 18
+		Decimals:    uint8(decimals), //nolint:gosec // checked above: decimals <= 18
 	}, true
 }

@@ -7,12 +7,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRotateBudget проверяет бюджет синхронизации с ротацией: неполный набор
-// проходит целиком, большие наборы обходятся по кругу без голодания хвоста.
+// TestRotateBudget checks the synchronization budget with rotation: an
+// incomplete set passes entirely, large sets are walked in circles without
+// starving the tail.
 func TestRotateBudget(t *testing.T) {
 	chosen, cursor := rotateBudget([]string{"a", "b"}, "", 10)
 	assert.Equal(t, []string{"a", "b"}, chosen)
-	assert.Empty(t, cursor, "неполный набор сбрасывает курсор")
+	assert.Empty(t, cursor, "an incomplete set resets the cursor")
 
 	all := []string{"a", "b", "c", "d", "e"}
 	seen := map[string]int{}
@@ -24,10 +25,10 @@ func TestRotateBudget(t *testing.T) {
 			seen[item]++
 		}
 	}
-	assert.Len(t, seen, len(all), "за три цикла бюджет покрывает все элементы")
+	assert.Len(t, seen, len(all), "in three cycles the budget covers all elements")
 }
 
-// TestDimRow проверяет валидацию строк Ledger перед записью в словарь.
+// TestDimRow checks validation of Ledger rows before writing them to the vocabulary.
 func TestDimRow(t *testing.T) {
 	cases := []struct {
 		name        string

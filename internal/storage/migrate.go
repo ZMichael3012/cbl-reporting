@@ -8,7 +8,7 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// Migrate применяет миграции сервиса (goose, диалект clickhouse) только вперед.
+// Migrate applies service migrations (goose, clickhouse dialect) forward only.
 func Migrate(ctx context.Context, db *sql.DB, dir string) error {
 	if err := goose.SetDialect("clickhouse"); err != nil {
 		return fmt.Errorf("goose dialect: %w", err)
