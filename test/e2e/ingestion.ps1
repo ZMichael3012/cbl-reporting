@@ -1,4 +1,4 @@
-# E2E CBL-11.2: конвейер ClickHouse на compose-стенде сервиса.
+﻿# E2E CBL-11.2: конвейер ClickHouse на compose-стенде сервиса.
 # Запуск из каталога сервиса: powershell -NoProfile -File test/e2e/ingestion.ps1
 # Сценарий: compose up (Kafka + ClickHouse) -> топики -> старт сервиса
 # (миграции fact_*, реконсиляция Kafka engine + MV) -> readyz -> продюсер

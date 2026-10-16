@@ -104,7 +104,9 @@ services:
       LEDGER_CHECK_WINDOW: 15s
     ports:
       - "8110:8110"
-      - "9110:9110"
+      # gRPC (Query) в dev публикуется только на loopback: без authN (mTLS - 0.6)
+      # порт не должен быть доступен сети (KI-reporting-13).
+      - "127.0.0.1:9110:9110"
       - "9310:9310"
     depends_on:
       kafka: { condition: service_healthy }

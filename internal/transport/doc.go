@@ -1,3 +1,3 @@
-// Пакет transport содержит транспортный слой сервиса reporting:
-// HTTP-хендлеры Gin и gRPC-обработчики, собранные из usecase.
+// Пакет transport содержит gRPC-транспорт сервиса reporting:
+// реализацию billing.reporting.v1.ReportingService поверх каталога отчетов.
 package transport

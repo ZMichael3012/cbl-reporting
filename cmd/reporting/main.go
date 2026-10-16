@@ -22,12 +22,17 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/cbl/cbl-kit/ginmw"
+	"github.com/cbl/cbl-kit/grpcmw"
+
+	reportingv1 "github.com/cbl/cbl-protos/gen/go/billing/reporting/v1"
 
 	"github.com/cbl/cbl-reporting/internal/config"
 	"github.com/cbl/cbl-reporting/internal/ledger"
 	"github.com/cbl/cbl-reporting/internal/ledgercheck"
 	"github.com/cbl/cbl-reporting/internal/metrics"
+	"github.com/cbl/cbl-reporting/internal/reports"
 	"github.com/cbl/cbl-reporting/internal/storage"
+	"github.com/cbl/cbl-reporting/internal/transport"
 	"github.com/cbl/cbl-reporting/internal/vocabulary"
 )
 
@@ -82,6 +87,11 @@ func run() error {
 	}
 	defer func() { _ = ledgerClient.Close() }()
 
+	reportsService, err := reports.New(db)
+	if err != nil {
+		return fmt.Errorf("reports service: %w", err)
+	}
+
 	counters := &metrics.Counters{}
 	syncer, err := vocabulary.New(db, ledgerClient, cfg.DimRefreshInterval, cfg.BackfillLimit, cfg.DimMerchantsLimit, log, counters)
 	if err != nil {
@@ -133,8 +143,10 @@ func run() error {
 		IdleTimeout:       60 * time.Second,
 	}
 	metricsSrv := &http.Server{Addr: cfg.MetricsAddr, Handler: counters.Handler(), ReadHeaderTimeout: 5 * time.Second}
-	grpcSrv := grpc.NewServer()
+	// Интерцептор kit: trace/request-id и восстановление после паник Query.
+	grpcSrv := grpc.NewServer(grpc.UnaryInterceptor(grpcmw.UnaryServer(log)))
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
+	reportingv1.RegisterReportingServiceServer(grpcSrv, transport.NewReportsServer(reportsService, log))
 
 	serveErrors := make(chan error, 3)
 	go func() {

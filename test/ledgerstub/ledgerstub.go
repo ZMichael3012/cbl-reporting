@@ -89,12 +89,11 @@ func (s *Server) Start(addr string) (string, error) {
 	}
 	s.mu.Lock()
 	s.listener = listener
-	s.grpc = grpc.NewServer()
+	grpcSrv := grpc.NewServer()
+	s.grpc = grpcSrv
 	s.mu.Unlock()
-	ledgerv1.RegisterLedgerServiceServer(s.grpc, s)
-	go func() {
-		_ = s.grpc.Serve(listener)
-	}()
+	ledgerv1.RegisterLedgerServiceServer(grpcSrv, s)
+	go func() { _ = grpcSrv.Serve(listener) }()
 	return listener.Addr().String(), nil
 }
 

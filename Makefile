@@ -19,10 +19,12 @@ cover:
 
 # e2e поднимает compose-стенд сервиса (Kafka + ClickHouse + ledger-stub),
 # применяет миграции и реконсиляцию через сервис и прогоняет сценарии:
-# конвейер событий до fact_* (11.2) и словарь/backfill/сверка (11.3).
+# конвейер событий до fact_* (11.2), словарь/backfill/сверка (11.3) и
+# gRPC-отчеты Query (11.4).
 e2e:
 	powershell -NoProfile -File test/e2e/ingestion.ps1
 	powershell -NoProfile -File test/e2e/vocabulary.ps1
+	powershell -NoProfile -File test/e2e/reports.ps1
 
 vet:
 	go vet ./...

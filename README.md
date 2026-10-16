@@ -40,3 +40,12 @@ clickhouse), применяются сервисом при старте; Kafka-
 расхождения (`missing_in_reporting`, `extra_in_reporting`, `amount_mismatch`) в
 логах и счетчиках `/metrics`: это контроль достоверности конвейера, не денежные
 решения (T-09) и не `recon.alerts` (зона Reconciler).
+
+## Отчеты Query (11.4)
+
+gRPC `billing.reporting.v1.ReportingService.Query` (:9110) отдает страницы закрытого
+каталога: `payments`, `payouts`, `ledger_entries` (мерчантский фильтр по
+денормализации 11.3) и `turnover` (`group_by`: `asset`, `day_asset`). Курсор - keyset
+по ключам сортировки отчета, лимит до 100 строк, деньги - канонические десятичные
+строки. Прокси мерчант API - `GET /v1/reports/{report_type}` в `cbl-billing-api`
+(мерчант из токена).
