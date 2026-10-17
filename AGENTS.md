@@ -126,8 +126,11 @@ less than the interval - otherwise unchecked segments remain between cycles),
 
 ## 6. Development rules
 
-- Pipeline: an SDD spec in `.specs/` -> tests first -> code -> 4 reviews -> AGENTS -> runs ->
-  commit `CBL-<epic>.<number>: ...` (the spec is part of the same commit).
+- Pipeline (TDD-first, CBL-001): an SDD spec with the architecture sketch and the full test
+  plan (unit and integration matrices, e2e scenario descriptions) -> contracts -> red tests
+  with recorded evidence -> implementation -> 4-agent review on the staged diff (no-context,
+  architecture, with-context, security - blocking) -> AGENTS.md -> final runs (unit +
+  integration + local e2e) -> linters -> commit (the spec is part of the same commit).
 - E2E: a mandatory local run following `test/e2e/E2E.md` (an agent, no PowerShell scripts);
   artifacts go to `test/e2e/.runs/<UTC mark>/` (mandatory `summary.md`, `compose-ps.txt`,
   `compose-logs.txt`, scenario and check outputs), auxiliary files to
