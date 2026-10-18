@@ -5,3 +5,6 @@ cover.out
 *.log
 # Artifacts of e2e runs (CBL-002 section 7 convention).
 test/e2e/.runs/
+# IDE directories (never committed).
+.idea/
+.vscode/
