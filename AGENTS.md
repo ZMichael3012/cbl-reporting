@@ -98,7 +98,7 @@ make test              # go test ./...
 make test-integration  # integration (testcontainers: Kafka, ClickHouse)
 make cover             # merged unit+integration coverage (cover.out)
 make vet               # go vet ./... (+ integration e2e tags)
-make lint              # golangci-lint in Docker (services/ context for cbl-kit)
+make lint              # golangci-lint in Docker (repo context; modules from GitHub)
 make up                # stand: kafka, schema-registry, clickhouse, ledger-stub, reporting, grafana
 make down              # stand + volume
 ```
@@ -203,6 +203,7 @@ not an SLO surface.
 | CBL-16.2 | 2026-10-16 | done (English comments and documentation across the repository: code, tests, configs, specs (11.2-11.4 translated), AGENTS.md, README; e2e runs via `test/e2e/E2E.md` with utilities in `.additionals/` and artifacts in `.runs/`; validation run PASS; coverage unchanged 86.5%) | `.specs/CBL-16.2-conventions.md` | this commit |
 | CBL-17.15 (reporting increment) | 2026-10-20 | done (provider, raw_status and fee-split dimensions: migration 00003 adds five payment fact columns, the payment Kafka/MV mapping projects CF-4 fields 12 - 16, the wire schema copies are synchronized at cf-4 (identical SHA256), the payments dashboard gains provider/raw-status and fee-split panels; Kafka+ClickHouse pipeline integration green with the new columns, dashboard artifact test green, focused stand run `20261020t082822z` PASS (migration v3, 5 columns, both panel SQLs, Grafana provisioning); the full dashboards data flow stays covered by the pipeline integration and the release run) | `.specs/CBL-17.15-provider-facts.md` | this commit |
 | CBL-11.5 | 2026-10-16 | done (Grafana business dashboards: pinned runtime and ClickHouse plugin baked at build, dashboards as code (payments/payouts/turnover) with exact Decimal money and regex-guarded variables, artifact unit test `test/dashboards`, e2e scenario `E2E_Reporting_Dashboards` PASS 10/10; coverage unchanged 86.5%) | `.specs/CBL-11.5-dashboards.md` | this commit |
+| CBL-0.9 | 2026-10-20 | done (cbl-kit and cbl-protos are pinned remote modules fetched from the GitHub origin; no local replace directives; Docker builds from the repository root; the lint container fetches the modules via GOPRIVATE and the git insteadOf rewrite) | `../../.specs/CBL-0.9-remote-modules.md` (umbrella) | this commit |
 
 ## 11. Runbook
 

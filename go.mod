@@ -100,8 +100,8 @@ require (
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.34.0
-	github.com/cbl/cbl-kit v0.0.0-00010101000000-000000000000
-	github.com/cbl/cbl-protos v0.0.0-00010101000000-000000000000
+	github.com/cbl/cbl-kit v0.0.0-20261020024025-deb4e66f1a90
+	github.com/cbl/cbl-protos v0.0.0-20261020024006-5f606b124c94
 	github.com/docker/docker v28.0.4+incompatible
 	github.com/docker/go-connections v0.5.0
 	github.com/google/uuid v1.6.0
@@ -111,7 +111,3 @@ require (
 	github.com/twmb/franz-go v1.22.0
 	google.golang.org/protobuf v1.36.12
 )
-
-replace github.com/cbl/cbl-kit => ../cbl-kit
-
-replace github.com/cbl/cbl-protos => ../cbl-protos

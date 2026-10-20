@@ -72,8 +72,8 @@ services:
   # entry seeding from the e2e script, gRPC is available only inside the network.
   ledger-stub:
     build:
-      context: ../..
-      dockerfile: cbl-reporting/test/e2e/.additionals/ledgerstub/Dockerfile
+      context: ..
+      dockerfile: test/e2e/.additionals/ledgerstub/Dockerfile
     environment:
       STUB_GRPC_ADDR: ":9040"
       STUB_HTTP_ADDR: ":9041"
@@ -86,8 +86,8 @@ services:
   reporting:
     profiles: ["app"]
     build:
-      context: ../..
-      dockerfile: cbl-reporting/Dockerfile
+      context: ..
+      dockerfile: Dockerfile
     environment:
       HTTP_ADDR: ":8110"
       GRPC_ADDR: ":9110"
