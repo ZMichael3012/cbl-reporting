@@ -101,6 +101,44 @@
       ],
       "title": "Data freshness (minutes since the last payment event)",
       "type": "stat"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}},
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "id": 5,
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+          "rawSql": "SELECT provider, raw_status, count() AS payments FROM reporting.fact_payment_events FINAL WHERE $__timeFilter(occurred_at) AND event_type = 'payment.completed' AND asset = '$asset' AND match(merchant_id, '${merchant:pipe}') GROUP BY provider, raw_status ORDER BY payments DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Payments by provider and raw status",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}},
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "id": 6,
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "cbl-clickhouse"},
+          "rawSql": "SELECT provider, divideDecimal(toDecimal64(sumIf(gateway_fee, event_type = 'payment.completed'), $decimals), toDecimal64(pow(10, $decimals), 0), $decimals) AS gateway, divideDecimal(toDecimal64(sumIf(network_fee, event_type = 'payment.completed'), $decimals), toDecimal64(pow(10, $decimals), 0), $decimals) AS network, divideDecimal(toDecimal64(sumIf(fx_spread, event_type = 'payment.completed'), $decimals), toDecimal64(pow(10, $decimals), 0), $decimals) AS fx_spread FROM reporting.fact_payment_events FINAL WHERE $__timeFilter(occurred_at) AND asset = '$asset' AND match(merchant_id, '${merchant:pipe}') GROUP BY provider ORDER BY gateway DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Fee split by provider",
+      "type": "table"
     }
   ],
   "refresh": "1m",

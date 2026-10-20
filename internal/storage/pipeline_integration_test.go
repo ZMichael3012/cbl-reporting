@@ -239,13 +239,22 @@ func TestIngestionPipelineIntegration(t *testing.T) {
 	var expectedAmount int64
 	var decimals uint8
 	var occurredAt time.Time
-	require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(`SELECT event_type, expected_amount, asset, decimals, occurred_at
+	var provider, rawStatus string
+	var gatewayFee, networkFee, fxSpread int64
+	require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf(`SELECT event_type, expected_amount, asset, decimals, occurred_at,
+provider, raw_status, gateway_fee, network_fee, fx_spread
 FROM reporting.fact_payment_events FINAL WHERE payment_id = '%s'`, paymentID)).
-		Scan(&eventType, &expectedAmount, &asset, &decimals, &occurredAt))
+		Scan(&eventType, &expectedAmount, &asset, &decimals, &occurredAt,
+			&provider, &rawStatus, &gatewayFee, &networkFee, &fxSpread))
 	assert.Equal(t, "payment.completed", eventType, "event type from the envelope header")
 	assert.Equal(t, int64(100_000000), expectedAmount)
 	assert.Equal(t, "USDT", asset)
 	assert.Equal(t, uint8(6), decimals)
+	assert.Equal(t, "mock", provider, "provider from the CF-4 field")
+	assert.Equal(t, "finished", rawStatus, "raw status from the CF-4 field")
+	assert.Equal(t, int64(600000), gatewayFee)
+	assert.Equal(t, int64(300000), networkFee)
+	assert.Equal(t, int64(100000), fxSpread)
 	assert.Equal(t, producer.OccurredAt.UnixMilli(), occurredAt.UnixMilli(),
 		"millisecond time precision from the event body")
 

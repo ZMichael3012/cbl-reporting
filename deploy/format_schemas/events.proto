@@ -1,6 +1,6 @@
 // Wire decoding schema of CBL events for the ClickHouse Kafka engine (CBL-11.2).
 // The schema is a wire-compatible flattening of the billing/events/v1 and
-// billing/common/v1 contracts from cbl-protos@cf-3.4: names and packages do not
+// billing/common/v1 contracts from cbl-protos@cf-4: names and packages do not
 // matter for the wire format, field numbers and types are preserved; unused
 // fields are omitted (the decoder skips unknown wire fields, numbers are never
 // reused per buf rules).
@@ -36,6 +36,11 @@ message PaymentRow {
   string txid = 9;
   uint64 state_version = 10;
   Timestamp occurred_at = 11;
+  string provider = 12;
+  string raw_status = 13;
+  Money gateway_fee = 14;
+  Money network_fee = 15;
+  Money fx_spread = 16;
 }
 
 message LedgerEntryRow {

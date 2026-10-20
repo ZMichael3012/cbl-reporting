@@ -187,6 +187,10 @@ func DefaultSpecs() []TopicSpec {
 expected_amount Tuple(minor_units Int64, asset String, decimals UInt32),
 received_amount Tuple(minor_units Int64, asset String, decimals UInt32),
 fee Tuple(minor_units Int64, asset String, decimals UInt32),
+provider String, raw_status String,
+gateway_fee Tuple(minor_units Int64, asset String, decimals UInt32),
+network_fee Tuple(minor_units Int64, asset String, decimals UInt32),
+fx_spread Tuple(minor_units Int64, asset String, decimals UInt32),
 quote_id String, rate String, txid String, state_version UInt64,
 occurred_at Tuple(seconds Int64, nanos Int32)`,
 			// The subquery renames the tuples: an alias matching a column
@@ -197,12 +201,16 @@ occurred_at Tuple(seconds Int64, nanos Int32)`,
 arrayFirst(x -> x.1 = 'event_type', _headers).2 AS event_type,
 amount_tuple.2 AS asset, toUInt8(amount_tuple.3) AS decimals,
 amount_tuple.1 AS expected_amount, received_tuple.1 AS received_amount,
-fee_tuple.1 AS fee_amount, quote_id, rate, txid, state_version,
+fee_tuple.1 AS fee_amount, provider, raw_status,
+gateway_tuple.1 AS gateway_fee, network_tuple.1 AS network_fee, fx_tuple.1 AS fx_spread,
+quote_id, rate, txid, state_version,
 toDateTime64(occurred_tuple.1, 3, 'UTC')
     + toIntervalNanosecond(toInt64(occurred_tuple.2)) AS occurred_at
 FROM (SELECT payment_id, merchant_id, quote_id, rate, txid, state_version, _headers,
              expected_amount AS amount_tuple, received_amount AS received_tuple,
-             fee AS fee_tuple, occurred_at AS occurred_tuple
+             fee AS fee_tuple, provider, raw_status,
+             gateway_fee AS gateway_tuple, network_fee AS network_tuple, fx_spread AS fx_tuple,
+             occurred_at AS occurred_tuple
       FROM reporting.kafka_payment_events)
 WHERE arrayFirst(x -> x.1 = 'event_id', _headers).2 != '' AND payment_id != ''
 AND tupleElement(amount_tuple, 3) <= 18`,

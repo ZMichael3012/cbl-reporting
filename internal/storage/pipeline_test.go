@@ -182,6 +182,8 @@ func TestBuildViewDDL(t *testing.T) {
 		"(SELECT payment_id, merchant_id, quote_id, rate, txid, state_version, _headers,",
 		"expected_amount AS amount_tuple",
 		"amount_tuple.1 AS expected_amount",
+		"fee AS fee_tuple, provider, raw_status,",
+		"gateway_tuple.1 AS gateway_fee, network_tuple.1 AS network_fee, fx_tuple.1 AS fx_spread",
 		"toDateTime64(occurred_tuple.1, 3, 'UTC')",
 		"+ toIntervalNanosecond(toInt64(occurred_tuple.2)) AS occurred_at",
 		"tupleElement(amount_tuple, 3) <= 18",
