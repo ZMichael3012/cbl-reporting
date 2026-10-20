@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	commonv1 "github.com/cbl/cbl-protos/gen/go/billing/common/v1"
+	commonv1 "github.com/ZMichael3012/cbl-protos/gen/go/billing/common/v1"
 )
 
 // TestDirectionName verifies the mapping of contract directions to fact column

@@ -16,8 +16,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	commonv1 "github.com/cbl/cbl-protos/gen/go/billing/common/v1"
-	ledgerv1 "github.com/cbl/cbl-protos/gen/go/billing/ledger/v1"
+	commonv1 "github.com/ZMichael3012/cbl-protos/gen/go/billing/common/v1"
+	ledgerv1 "github.com/ZMichael3012/cbl-protos/gen/go/billing/ledger/v1"
 )
 
 // Account describes a fixture merchant account.

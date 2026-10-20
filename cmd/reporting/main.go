@@ -21,10 +21,10 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/cbl/cbl-kit/ginmw"
-	"github.com/cbl/cbl-kit/grpcmw"
+	"github.com/ZMichael3012/cbl-kit/ginmw"
+	"github.com/ZMichael3012/cbl-kit/grpcmw"
 
-	reportingv1 "github.com/cbl/cbl-protos/gen/go/billing/reporting/v1"
+	reportingv1 "github.com/ZMichael3012/cbl-protos/gen/go/billing/reporting/v1"
 
 	"github.com/cbl/cbl-reporting/internal/config"
 	"github.com/cbl/cbl-reporting/internal/ledger"
